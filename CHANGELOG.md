@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Updated `rustls` from 0.23.40 to 0.23.45 so TLS 1.3 handshake messages at
+  the wrong encryption level are rejected, resolving `RUSTSEC-2026-0285`
+  without changing the configured TLS feature set (#15).
+
 ## [2.2.1] - 2026-09-12
 
 ### Fixed
