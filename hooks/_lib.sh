@@ -460,13 +460,30 @@ ai_memory_auth_header_file() {
     [ -r "$_amhf" ] && printf '%s' "$_amhf"
 }
 
+# Mint the key before the first POST so an ambiguous delivery and its spool
+# replay carry the same identity. The server can then discard a replay whose
+# original response was lost after the observation committed.
+ai_memory_ingest_key() {
+    _amrnd=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+    [ -n "$_amrnd" ] || _amrnd=$(printf '%s%s' "$(date +%s 2>/dev/null || printf '0')" "$$")
+    printf 'sh%s' "$_amrnd"
+}
+
+ai_memory_url_with_ingest_key() {
+    case "$1" in
+        *\?ingest_key=* | *\&ingest_key=*) printf '%s' "$1" ;;
+        *\?*) printf '%s&ingest_key=%s' "$1" "$(ai_memory_ingest_key)" ;;
+        *) printf '%s?ingest_key=%s' "$1" "$(ai_memory_ingest_key)" ;;
+    esac
+}
+
 ai_memory_post_hook() {
-    _amurl="$1"
+    _amurl=$(ai_memory_url_with_ingest_key "$1")
     _ambody=$(cat)
     _amhdr=$(ai_memory_auth_header_file || printf '')
     if [ -n "${AI_MEMORY_AUTH_TOKEN:-}" ]; then
         _amcode=$(printf '%s' "$_ambody" | curl -s --max-time 0.2 -o /dev/null \
-            -w '%{http_code}' -X POST "$1" \
+            -w '%{http_code}' -X POST "$_amurl" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $AI_MEMORY_AUTH_TOKEN" \
             --data-binary @- 2>/dev/null) || _amcode=000
@@ -474,13 +491,13 @@ ai_memory_post_hook() {
         # `-H @file`: curl reads the header from disk, so the bearer never
         # appears in curl's argv the way an inline `-H` would (#552).
         _amcode=$(printf '%s' "$_ambody" | curl -s --max-time 0.2 -o /dev/null \
-            -w '%{http_code}' -X POST "$1" \
+            -w '%{http_code}' -X POST "$_amurl" \
             -H "Content-Type: application/json" \
             -H @"$_amhdr" \
             --data-binary @- 2>/dev/null) || _amcode=000
     else
         _amcode=$(printf '%s' "$_ambody" | curl -s --max-time 0.2 -o /dev/null \
-            -w '%{http_code}' -X POST "$1" \
+            -w '%{http_code}' -X POST "$_amurl" \
             -H "Content-Type: application/json" \
             --data-binary @- 2>/dev/null) || _amcode=000
     fi
@@ -573,27 +590,14 @@ ai_memory_spool_token() {
         | head -n 1 | tr -d '\r\n'
 }
 
-# Idempotency key minted ONCE at spool time and baked into the URL, so this
-# bundle's drain and a concurrent `ai-memory hook-drain` cannot double-ingest.
-ai_memory_ingest_key() {
-    _amrnd=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
-    [ -n "$_amrnd" ] || _amrnd=$(printf '%s%s' "$(date +%s 2>/dev/null || printf '0')" "$$")
-    printf 'sh%s' "$_amrnd"
-}
-
 # Persist one undelivered event. Best-effort on top of best-effort capture:
 # every failure path returns 0 so a hook never fails because of the spool.
 ai_memory_spool_event() {
-    _amsurl="$1"
+    _amsurl=$(ai_memory_url_with_ingest_key "$1")
     _amsbody="$2"
     _amsdir=$(ai_memory_spool_dir)
     mkdir -p "$_amsdir" 2>/dev/null || return 0
     chmod 700 "$_amsdir" 2>/dev/null || true
-    case "$_amsurl" in
-        *ingest_key=*) ;;
-        *\?*) _amsurl="$_amsurl&ingest_key=$(ai_memory_ingest_key)" ;;
-        *) _amsurl="$_amsurl?ingest_key=$(ai_memory_ingest_key)" ;;
-    esac
     _amstok=$(ai_memory_spool_token)
     _amsnow=$(ai_memory_now_ms)
     AI_MEMORY_SPOOL_SEQ=$((${AI_MEMORY_SPOOL_SEQ:-0} + 1))

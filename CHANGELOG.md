@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The POSIX shell hook bundle now assigns an `ingest_key` before its initial
+  delivery and preserves that key when spooling the event, preventing a replay
+  from creating a duplicate observation when the server committed the first
+  request but its response was lost (#14).
+
 ## [2.2.1] - 2026-09-12
 
 ### Fixed

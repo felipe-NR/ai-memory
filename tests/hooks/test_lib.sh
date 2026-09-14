@@ -331,8 +331,11 @@ SPOOL_FILE=$(ls "$TMP/spool-data/hook-spool/"*.json 2>/dev/null | head -n 1)
 assert_eq "spool_event writes one entry" "1" \
     "$(ls "$TMP/spool-data/hook-spool/"*.json 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "spooled body round-trips" "$SPOOL_BODY" "$(ai_memory_json_field body "$SPOOL_FILE")"
-assert_eq "spool_event mints an ingest_key" "yes" \
-    "$(case "$(ai_memory_json_field url "$SPOOL_FILE")" in *ingest_key=sh*) printf yes ;; *) printf no ;; esac)"
+case "$(ai_memory_json_field url "$SPOOL_FILE")" in
+    *ingest_key=sh*) SPOOL_HAS_INGEST_KEY=yes ;;
+    *) SPOOL_HAS_INGEST_KEY=no ;;
+esac
+assert_eq "spool_event mints an ingest_key" "yes" "$SPOOL_HAS_INGEST_KEY"
 assert_eq "spool entry is 0600" "600" \
     "$(ls -l "$SPOOL_FILE" | cut -c2-10 | tr 'rwx-' '4210' | awk '{print substr($0,1,3)+0 substr($0,4,3)+0 substr($0,7,3)+0}' >/dev/null 2>&1; \
        if [ -r "$SPOOL_FILE" ] && [ ! -x "$SPOOL_FILE" ]; then printf '600'; else printf 'other'; fi)"
@@ -348,6 +351,34 @@ ai_memory_json_field body "$TMP/spool-data/hook-spool/foreign.json" >/dev/null 2
     && FOREIGN=read || FOREIGN=declined
 assert_eq "json_field declines a \\u escape" "declined" "$FOREIGN"
 rm -f "$TMP/spool-data/hook-spool/foreign.json"
+
+# A timeout can hide a successful server write. The initial attempt and the
+# spooled replay must carry the same key so the server can reject the replay.
+rm -f "$TMP/spool-data/hook-spool/"*.json
+CURL_ATTEMPT_FILE="$TMP/curl-attempt-url"
+curl() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            http://* | https://*) printf '%s' "$1" >"$CURL_ATTEMPT_FILE" ;;
+        esac
+        shift
+    done
+    cat >/dev/null
+    return 28
+}
+printf '%s' '{"e":"ambiguous"}' \
+    | ai_memory_post_hook "http://127.0.0.1:49374/hook?event=stop&agent=cursor" >/dev/null 2>&1
+unset -f curl
+SPOOL_FILE=$(ls "$TMP/spool-data/hook-spool/"*.json 2>/dev/null | head -n 1)
+ATTEMPT_URL=$(cat "$CURL_ATTEMPT_FILE")
+SPOOL_URL=$(ai_memory_json_field url "$SPOOL_FILE")
+case "$ATTEMPT_URL" in
+    *ingest_key=sh*) ATTEMPT_HAS_INGEST_KEY=yes ;;
+    *) ATTEMPT_HAS_INGEST_KEY=no ;;
+esac
+assert_eq "post_hook keys the initial delivery" "yes" "$ATTEMPT_HAS_INGEST_KEY"
+assert_eq "post_hook preserves the key after an ambiguous delivery" \
+    "$ATTEMPT_URL" "$SPOOL_URL"
 
 # An unreachable server must leave the event on disk instead of dropping it.
 rm -f "$TMP/spool-data/hook-spool/"*.json
