@@ -1524,6 +1524,152 @@ mod slow {
         );
     }
 
+    /// `run` auto-wires hooks whose command is the native client's own path,
+    /// so the client must not live where a cache flush deletes it, and its
+    /// release `hooks/` bundle must sit beside it for script-based harnesses.
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_installs_native_client_and_hook_bundle_outside_the_cache() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let release = tmp.path().join("release");
+        std::fs::create_dir_all(release.join("hooks/claude-code")).unwrap();
+        let record = tmp.path().join("native-record.txt");
+        std::fs::write(
+            release.join("ai-memory"),
+            format!(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {}\n",
+                shell_path(&record)
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            release.join("ai-memory"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::write(
+            release.join("hooks/claude-code/session-start.sh"),
+            "#!/bin/sh\n",
+        )
+        .unwrap();
+        let tarball = tmp.path().join("release.tar.gz");
+        let tar = Command::new("tar")
+            .arg("-czf")
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&release)
+            .arg(".")
+            .status()
+            .unwrap();
+        assert!(tar.success(), "building the fake release tarball failed");
+        let sum = sha256_file(&tarball);
+
+        // Serve the tarball and its checksum the way the GitHub release does;
+        // the checksum names the asset the wrapper asked for.
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let curl = bin.join("curl");
+        std::fs::write(
+            &curl,
+            format!(
+                "#!/usr/bin/env bash\n\
+                 url=''; out=''\n\
+                 while [ \"$#\" -gt 0 ]; do\n\
+                   case \"$1\" in\n\
+                     -o) out=\"$2\"; shift 2 ;;\n\
+                     -*) shift ;;\n\
+                     *) url=\"$1\"; shift ;;\n\
+                   esac\n\
+                 done\n\
+                 case \"$url\" in\n\
+                   *.tar.gz.sha256) body=\"{sum}  $(basename \"${{url%.sha256}}\")\" ;;\n\
+                   *.tar.gz) cp {tarball} \"$out\"; exit 0 ;;\n\
+                   *) exit 22 ;;\n\
+                 esac\n\
+                 if [ -n \"$out\" ]; then printf '%s\\n' \"$body\" > \"$out\"; else printf '%s\\n' \"$body\"; fi\n",
+                tarball = shell_path(&tarball),
+            ),
+        )
+        .unwrap();
+        let docker = bin.join("docker");
+        let docker_record = tmp.path().join("docker-record.txt");
+        std::fs::write(
+            &docker,
+            format!(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {}\nexit 99\n",
+                shell_path(&docker_record)
+            ),
+        )
+        .unwrap();
+        for script in [&curl, &docker] {
+            std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!(
+            "{}:{}",
+            shell_path(&bin),
+            std::env::var("PATH").unwrap_or_default()
+        );
+
+        // Default data home, then an explicit XDG_DATA_HOME.
+        for (case, xdg_data_home) in [("default", false), ("xdg", true)] {
+            let home = tmp.path().join(format!("home-{case}"));
+            let cache = tmp.path().join(format!("cache-{case}"));
+            let data_home = if xdg_data_home {
+                tmp.path().join(format!("data-{case}"))
+            } else {
+                home.join(".local/share")
+            };
+            std::fs::create_dir_all(&home).unwrap();
+            let _ = std::fs::remove_file(&record);
+
+            let mut command = shell_script_command(&repo_root().join("bin/ai-memory"));
+            command
+                .args(["workstreams", "--limit", "5"])
+                .env("HOME", &home)
+                .env("XDG_CACHE_HOME", &cache)
+                .env("AI_MEMORY_DOCKER", &docker)
+                .env("PATH", &path)
+                .env_remove("AI_MEMORY_NATIVE_BIN");
+            if xdg_data_home {
+                command.env("XDG_DATA_HOME", &data_home);
+            } else {
+                command.env_remove("XDG_DATA_HOME");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: wrapper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let runner = data_home.join("ai-memory/native-runner");
+            assert!(
+                runner.join("ai-memory").is_file(),
+                "{case}: native client missing from {}",
+                runner.display()
+            );
+            assert!(
+                runner.join("hooks/claude-code/session-start.sh").is_file(),
+                "{case}: release hooks bundle not kept beside the client"
+            );
+            assert!(
+                !cache.join("ai-memory/native-runner").exists(),
+                "{case}: native client was installed under the cache"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&record).unwrap(),
+                "workstreams\n--limit\n5\n",
+                "{case}: wrapper did not exec the installed client"
+            );
+        }
+        assert!(
+            !docker_record.exists(),
+            "managed host command entered Docker"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn wrapper_upgrade_does_not_claim_an_updated_remote_server_is_stale() {

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The Linux/macOS Docker wrapper now keeps its native host client in
+  `${XDG_DATA_HOME:-~/.local/share}/ai-memory/native-runner` instead of
+  `~/.cache/ai-memory/native-runner`. `ai-memory run` auto-wires hooks whose
+  command is that client's path (Claude Code, Codex, Kimi Code, Command Code,
+  Kiro CLI v3, Grok, Antigravity CLI), so flushing `~/.cache` left every hook of
+  those harnesses pointing at a missing binary. The wrapper also keeps the
+  release's `hooks/` bundle beside the client, so auto-wire no longer fails
+  with "could not locate hooks directory" for script-based harnesses on a host
+  where `install-hooks` never ran. (#TBD)
 - Auto-improve review no longer stages a proposal whose LLM-produced page
   path contains a Windows-illegal character (e.g. a `:` copied from a
   conventional-commit subject). That path passed the deliberately tolerant
