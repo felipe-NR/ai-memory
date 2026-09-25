@@ -53,7 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`2026-10-01T23:59:59.999999Z`) instead of the date copied verbatim. OKF
   v0.2 requires every timestamp to carry an explicit UTC offset, and read a
   bare date as the start of that day, a day earlier than ai-memory's
-  end-of-day TTL. An RFC 3339 `expires_at` is still carried unchanged. (#TBD)
+  end-of-day TTL. An RFC 3339 `expires_at` is still carried unchanged.
+  Pages already written that way are repaired in place when `serve`
+  starts: index row and file, with the same version row, `updated_at`,
+  `generated.at` and body, in one wiki commit, and nothing to do on later
+  starts. (#TBD)
 - The default log filter's `rmcp=warn` cap (#894) no longer raises rmcp
   above a quieter `log_level`. A target directive beats the global level
   either way, so with `log_level = "error"` or `"off"` the cap re-enabled the

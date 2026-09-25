@@ -101,8 +101,7 @@ pub fn conform_frontmatter(path: &str, frontmatter: &mut Value) {
     // stale_after ← existing TTL. OKF timestamps must carry an explicit
     // UTC offset, but `expires_at` also accepts a bare `YYYY-MM-DD`
     // (end of that day, UTC): render that as the instant it names. An
-    // RFC 3339 value already conforms and is carried verbatim, so pages
-    // written before this rule keep byte-identical frontmatter.
+    // RFC 3339 value already conforms and is carried verbatim.
     if !map.contains_key("stale_after")
         && let Some(expires) = map.get("expires_at").and_then(Value::as_str)
         && let Some(instant) = crate::page::parse_expires_at_instant(expires)
@@ -114,6 +113,9 @@ pub fn conform_frontmatter(path: &str, frontmatter: &mut Value) {
         };
         map.insert("stale_after".into(), Value::String(stale_after));
     }
+    // A page an older build conformed carries the bare date it copied;
+    // any rewrite of it (a restore, a hand edit, a reindex) repairs it.
+    repair_date_only_stale_after_in(map);
 
     // sources ← session provenance already stamped by the consolidator.
     if !map.contains_key("sources")
@@ -148,6 +150,34 @@ pub fn conform_frontmatter(path: &str, frontmatter: &mut Value) {
             map.insert("generated".into(), json!({ "by": by }));
         }
     }
+}
+
+/// Repair a `stale_after` that a build before this rule copied verbatim from
+/// a date-only `expires_at`. The signature is exact: `stale_after` equals
+/// `expires_at` and is not an RFC 3339 instant. It becomes the instant the
+/// TTL expires the page, which is what [`conform_frontmatter`] derives today,
+/// so a repaired page matches one written fresh. Returns whether it changed
+/// anything; a `stale_after` that differs from `expires_at` is left alone.
+pub fn repair_date_only_stale_after(frontmatter: &mut Value) -> bool {
+    frontmatter
+        .as_object_mut()
+        .is_some_and(repair_date_only_stale_after_in)
+}
+
+fn repair_date_only_stale_after_in(map: &mut Map<String, Value>) -> bool {
+    let (Some(Value::String(stale)), Some(Value::String(expires))) =
+        (map.get("stale_after"), map.get("expires_at"))
+    else {
+        return false;
+    };
+    if stale != expires || stale.trim().parse::<jiff::Timestamp>().is_ok() {
+        return false;
+    }
+    let Some(instant) = crate::page::parse_expires_at_instant(expires) else {
+        return false;
+    };
+    map.insert("stale_after".into(), Value::String(instant.to_string()));
+    true
 }
 
 /// Clone `frontmatter` with `generated.at` removed — the store compares
@@ -281,6 +311,35 @@ mod tests {
         let mut fm = json!({"expires_at": "soon"});
         conform_frontmatter("notes/x.md", &mut fm);
         assert!(fm.get("stale_after").is_none());
+    }
+
+    #[test]
+    fn a_stale_after_copied_from_a_date_only_ttl_is_repaired() {
+        let mut fm = json!({"expires_at": "2026-10-01", "stale_after": "2026-10-01"});
+        assert!(repair_date_only_stale_after(&mut fm));
+        assert_eq!(fm["stale_after"], "2026-10-01T23:59:59.999999Z");
+        assert!(
+            !repair_date_only_stale_after(&mut fm),
+            "repair is idempotent"
+        );
+
+        // conform_frontmatter repairs it too, so any rewrite heals the page.
+        let mut old = json!({"expires_at": "2026-10-01", "stale_after": "2026-10-01"});
+        conform_frontmatter("notes/x.md", &mut old);
+        assert_eq!(old["stale_after"], "2026-10-01T23:59:59.999999Z");
+    }
+
+    #[test]
+    fn a_stale_after_that_is_not_the_verbatim_copy_is_left_alone() {
+        for mut fm in [
+            json!({"expires_at": "2026-10-01", "stale_after": "2026-09-01"}),
+            json!({"expires_at": "2026-10-01T12:00:00Z", "stale_after": "2026-10-01T12:00:00Z"}),
+            json!({"stale_after": "2026-10-01"}),
+        ] {
+            let before = fm.clone();
+            assert!(!repair_date_only_stale_after(&mut fm));
+            assert_eq!(fm, before);
+        }
     }
 
     #[test]

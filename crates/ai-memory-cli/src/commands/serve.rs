@@ -1084,6 +1084,17 @@ pub async fn run(config: &Config, args: ServeArgs) -> Result<()> {
         Ok(n) => tracing::info!(count = n, "wrote _meta.md scope manifests"),
         Err(e) => tracing::warn!(error = %e, "scope-manifest backfill failed (non-fatal)"),
     }
+    // Pages conformed by an older build carry a date-only OKF `stale_after`
+    // copied from `expires_at`; repair them in place. Idempotent; non-fatal.
+    match wiki.repair_date_only_stale_after().await {
+        Ok((0, 0)) => {}
+        Ok((rows, files)) => tracing::info!(
+            rows,
+            files,
+            "repaired date-only OKF stale_after on existing pages"
+        ),
+        Err(e) => tracing::warn!(error = %e, "OKF stale_after repair failed (non-fatal)"),
+    }
     let baseline_checkpoint = wiki.ensure_upgrade_baseline_checkpoint();
     match classify_baseline_checkpoint(&baseline_checkpoint) {
         BaselineCheckpointLog::Created => {

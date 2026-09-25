@@ -711,6 +711,92 @@ pub fn okf_migrate_latest_pages(conn: &mut Connection) -> StoreResult<Vec<OkfMig
     Ok(migrated)
 }
 
+/// A latest page whose `expires_at` is a bare `YYYY-MM-DD`, returned by
+/// [`repair_date_only_stale_after`] so the wiki layer can check its file.
+#[derive(Debug, Clone)]
+pub struct DateOnlyTtlPage {
+    /// Owning workspace.
+    pub workspace_id: ai_memory_core::WorkspaceId,
+    /// Owning project.
+    pub project_id: ai_memory_core::ProjectId,
+    /// Wiki-relative page path.
+    pub path: String,
+}
+
+/// What a [`repair_date_only_stale_after`] pass did.
+#[derive(Debug, Default, Clone)]
+pub struct StaleAfterRepair {
+    /// Latest rows whose `stale_after` was rewritten in place.
+    pub rows_repaired: u64,
+    /// Every latest page with a date-only `expires_at`, repaired or not.
+    pub date_only_pages: Vec<DateOnlyTtlPage>,
+}
+
+/// Idempotent startup repair of the OKF `stale_after` that builds before
+/// [`ai_memory_core::okf::repair_date_only_stale_after`] copied verbatim
+/// from a date-only `expires_at`. Same in-place rules as
+/// [`okf_migrate_latest_pages`]: same id, same version row, `updated_at`
+/// and `generated.at` untouched, historical versions left as they were.
+/// A repaired store rewrites nothing on the next run.
+///
+/// Every date-only page is returned, not only the rows rewritten here, so
+/// the wiki's file pass still finds a file whose row an earlier, interrupted
+/// run already repaired. The set is small: pages with a date-only TTL.
+pub fn repair_date_only_stale_after(conn: &mut Connection) -> StoreResult<StaleAfterRepair> {
+    type LatestPageRow = (Vec<u8>, Vec<u8>, Vec<u8>, String, String);
+    let tx = conn.transaction()?;
+    let mut repair = StaleAfterRepair::default();
+    {
+        // The LIKE only narrows the scan; the TTL is checked on the parsed
+        // frontmatter below.
+        let mut stmt = tx.prepare(
+            "SELECT id, workspace_id, project_id, path, frontmatter_json FROM pages \
+             WHERE is_latest = 1 AND frontmatter_json LIKE '%\"expires_at\"%'",
+        )?;
+        let rows: Vec<LatestPageRow> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        for (id, ws, proj, path, fm_str) in rows {
+            let Ok(mut fm) = serde_json::from_str::<serde_json::Value>(&fm_str) else {
+                continue;
+            };
+            let date_only = fm
+                .get("expires_at")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|raw| {
+                    raw.trim().parse::<jiff::Timestamp>().is_err()
+                        && ai_memory_core::parse_expires_at_instant(raw).is_some()
+                });
+            if !date_only {
+                continue;
+            }
+            if ai_memory_core::okf::repair_date_only_stale_after(&mut fm) {
+                tx.execute(
+                    "UPDATE pages SET frontmatter_json = ?1 WHERE id = ?2",
+                    params![serde_json::to_string(&fm)?, id],
+                )?;
+                repair.rows_repaired += 1;
+            }
+            repair.date_only_pages.push(DateOnlyTtlPage {
+                workspace_id: ai_memory_core::WorkspaceId::from_slice(&ws)?,
+                project_id: ai_memory_core::ProjectId::from_slice(&proj)?,
+                path,
+            });
+        }
+    }
+    tx.commit()?;
+    Ok(repair)
+}
+
 /// Stamp the per-version `generated.at` (write time, UTC) onto conformed
 /// frontmatter and serialize it. Runs only on the paths that create a new
 /// version row — the idempotent short-circuit above never reaches it, so

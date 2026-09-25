@@ -446,6 +446,10 @@ pub(crate) enum WriteCmd {
     OkfMigrateLatestPages {
         reply: oneshot::Sender<StoreResult<Vec<ops::OkfMigratedPage>>>,
     },
+    /// Idempotent in-place repair of date-only OKF `stale_after` values.
+    RepairDateOnlyStaleAfter {
+        reply: oneshot::Sender<StoreResult<ops::StaleAfterRepair>>,
+    },
     /// Read-only count of latest rows still lacking OKF conformance.
     OkfNonconformantCount {
         reply: oneshot::Sender<StoreResult<u64>>,
@@ -1935,6 +1939,20 @@ impl WriterHandle {
         rx.await.map_err(|_| StoreError::WriterClosed)?
     }
 
+    /// Repair, in place, the OKF `stale_after` that older builds copied
+    /// verbatim from a date-only `expires_at`; returns every date-only page
+    /// so the wiki layer can align the files.
+    ///
+    /// # Errors
+    /// Returns [`StoreError::WriterClosed`] if the actor has shut down, or
+    /// propagates the SQL error.
+    pub async fn repair_date_only_stale_after(&self) -> StoreResult<ops::StaleAfterRepair> {
+        let (tx, rx) = oneshot::channel();
+        self.send(WriteCmd::RepairDateOnlyStaleAfter { reply: tx })
+            .await?;
+        rx.await.map_err(|_| StoreError::WriterClosed)?
+    }
+
     /// Count latest page rows still lacking OKF conformance (read-only).
     ///
     /// # Errors
@@ -3317,6 +3335,10 @@ fn worker_loop(mut conn: Connection, mut rx: mpsc::Receiver<WriteCmd>) {
             WriteCmd::OkfMigrateLatestPages { reply } => {
                 let result = ops::okf_migrate_latest_pages(&mut conn);
                 send_or_warn(reply, result, "okf_migrate_latest_pages");
+            }
+            WriteCmd::RepairDateOnlyStaleAfter { reply } => {
+                let result = ops::repair_date_only_stale_after(&mut conn);
+                send_or_warn(reply, result, "repair_date_only_stale_after");
             }
             WriteCmd::OkfNonconformantCount { reply } => {
                 let result = ops::okf_nonconformant_latest_pages(&conn);
