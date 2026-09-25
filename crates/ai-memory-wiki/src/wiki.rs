@@ -2454,20 +2454,7 @@ pub(crate) fn parse_expires_at(
     if raw.is_empty() {
         return Ok(None);
     }
-    if let Ok(ts) = raw.parse::<jiff::Timestamp>() {
-        return Ok(Some(ts));
-    }
-    if let Ok(date) = raw.parse::<jiff::civil::Date>() {
-        let ts = date
-            .at(23, 59, 59, 999_999_000)
-            .to_zoned(jiff::tz::TimeZone::UTC)
-            .map_err(|e| {
-                ai_memory_wiki_error(&format!(
-                    "invalid expires_at date in frontmatter for {}: {e}",
-                    path.as_str()
-                ))
-            })?
-            .timestamp();
+    if let Some(ts) = ai_memory_core::parse_expires_at_instant(raw) {
         return Ok(Some(ts));
     }
     Err(ai_memory_wiki_error(&format!(
@@ -2882,6 +2869,52 @@ mod tests {
                 .ends_with('Z')
         );
         assert!(ai_memory_core::okf::is_conformant(&parsed.frontmatter));
+    }
+
+    /// OKF requires every timestamp to carry an explicit UTC offset, while
+    /// the TTL key also accepts a bare date. The file on disk must name the
+    /// instant the TTL machinery hides the page, not the date as typed.
+    #[tokio::test]
+    async fn a_date_only_ttl_lands_on_disk_as_an_okf_stale_after_instant() {
+        let tmp = TempDir::new().unwrap();
+        let store = Store::open(tmp.path()).unwrap();
+        let ws = store.writer.get_or_create_workspace("w").await.unwrap();
+        let proj = store
+            .writer
+            .get_or_create_project(ws, "p", None)
+            .await
+            .unwrap();
+        let wiki = Wiki::new(tmp.path(), store.writer.clone()).unwrap();
+
+        let frontmatter = serde_json::json!({"title": "Freeze", "expires_at": "2099-08-01"});
+        wiki.write_page(req(
+            ws,
+            proj,
+            "notes/freeze.md",
+            "release freeze",
+            frontmatter.clone(),
+        ))
+        .await
+        .unwrap();
+
+        let raw =
+            std::fs::read_to_string(wiki.project_root(ws, proj).join("notes/freeze.md")).unwrap();
+        let parsed = crate::markdown::parse(&raw).unwrap();
+        assert_eq!(parsed.frontmatter["expires_at"], "2099-08-01");
+        assert_eq!(
+            parsed.frontmatter["stale_after"],
+            "2099-08-01T23:59:59.999999Z"
+        );
+        let path = PagePath::new("notes/freeze.md").unwrap();
+        let ttl = parse_expires_at(&path, &frontmatter).unwrap().unwrap();
+        assert_eq!(
+            parsed.frontmatter["stale_after"]
+                .as_str()
+                .unwrap()
+                .parse::<jiff::Timestamp>()
+                .unwrap(),
+            ttl
+        );
     }
 
     /// Refused on every platform, not only the case-insensitive ones: the

@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged — this only makes the existing warning reliably visible. (#903)
 
 ### Fixed
+- A page whose `expires_at` is a bare date (`2026-10-01`) now gets an OKF
+  `stale_after` that names the instant the TTL expires it
+  (`2026-10-01T23:59:59.999999Z`) instead of the date copied verbatim. OKF
+  v0.2 requires every timestamp to carry an explicit UTC offset, and read a
+  bare date as the start of that day, a day earlier than ai-memory's
+  end-of-day TTL. An RFC 3339 `expires_at` is still carried unchanged. (#TBD)
 - The default log filter's `rmcp=warn` cap (#894) no longer raises rmcp
   above a quieter `log_level`. A target directive beats the global level
   either way, so with `log_level = "error"` or `"off"` the cap re-enabled the

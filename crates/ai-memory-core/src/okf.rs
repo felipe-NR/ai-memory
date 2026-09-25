@@ -98,12 +98,21 @@ pub fn conform_frontmatter(path: &str, frontmatter: &mut Value) {
         map.insert("description".into(), Value::String(summary.to_string()));
     }
 
-    // stale_after ← existing TTL. `expires_at` is stored as an ISO-8601
-    // string by the TTL machinery; carry it verbatim.
+    // stale_after ← existing TTL. OKF timestamps must carry an explicit
+    // UTC offset, but `expires_at` also accepts a bare `YYYY-MM-DD`
+    // (end of that day, UTC): render that as the instant it names. An
+    // RFC 3339 value already conforms and is carried verbatim, so pages
+    // written before this rule keep byte-identical frontmatter.
     if !map.contains_key("stale_after")
         && let Some(expires) = map.get("expires_at").and_then(Value::as_str)
+        && let Some(instant) = crate::page::parse_expires_at_instant(expires)
     {
-        map.insert("stale_after".into(), Value::String(expires.to_string()));
+        let stale_after = if expires.trim().parse::<jiff::Timestamp>().is_ok() {
+            expires.to_string()
+        } else {
+            instant.to_string()
+        };
+        map.insert("stale_after".into(), Value::String(stale_after));
     }
 
     // sources ← session provenance already stamped by the consolidator.
@@ -246,6 +255,32 @@ mod tests {
         );
         // extensions untouched
         assert_eq!(fm["tier"], "episodic");
+    }
+
+    #[test]
+    fn a_date_only_ttl_becomes_an_offset_bearing_stale_after() {
+        let mut fm = json!({"expires_at": "2026-10-01"});
+        conform_frontmatter("notes/x.md", &mut fm);
+        let once = fm.clone();
+        conform_frontmatter("notes/x.md", &mut fm);
+        assert_eq!(once, fm, "second conform changed bytes");
+        // The TTL's own reading of a bare date: the end of that day, UTC.
+        assert_eq!(fm["stale_after"], "2026-10-01T23:59:59.999999Z");
+        assert_eq!(fm["expires_at"], "2026-10-01");
+    }
+
+    #[test]
+    fn an_rfc3339_ttl_is_carried_into_stale_after_verbatim() {
+        let mut fm = json!({"expires_at": "2026-10-01T12:00:00-03:00"});
+        conform_frontmatter("notes/x.md", &mut fm);
+        assert_eq!(fm["stale_after"], "2026-10-01T12:00:00-03:00");
+    }
+
+    #[test]
+    fn an_unparseable_ttl_derives_no_stale_after() {
+        let mut fm = json!({"expires_at": "soon"});
+        conform_frontmatter("notes/x.md", &mut fm);
+        assert!(fm.get("stale_after").is_none());
     }
 
     #[test]
