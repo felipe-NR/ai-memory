@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ai-memory bootstrap` now leaves headroom for its own token estimate. It
+  counts bytes ÷ 4, which undercounts non-English text and source code (about
+  40% on Portuguese mixed with code, as measured for consolidation), and it
+  filled `--max-input-tokens` and `--chunk-input-tokens` to the last estimated
+  token, so a chunk sized to fit a model's window could overflow it on input
+  alone. Prunes and chunks now fill 80% of each budget by the estimate, the
+  same default consolidation uses; a run may plan more chunks than before.
+  (#TBD)
+
 ## [2.4.1] - 2026-09-25
 
 ### Changed

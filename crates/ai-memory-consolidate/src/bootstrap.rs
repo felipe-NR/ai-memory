@@ -52,6 +52,20 @@ use crate::path_sanitize::slugify_page_path;
 /// only used to decide which sources to drop.
 const CHARS_PER_TOKEN: usize = 4;
 
+/// Share of a token budget that bootstrap fills, by its own estimate.
+///
+/// [`CHARS_PER_TOKEN`] undercounts denser text: non-English prose and source
+/// code measured about 40% above a bytes ÷ 4 estimate on real tokenizers
+/// (#884). Filling only 80% of `--max-input-tokens` and `--chunk-input-tokens`
+/// keeps a bundle the estimate calls a fit inside the provider's window,
+/// the same default consolidation uses for this undercount.
+const ESTIMATE_BUDGET_PERCENT: usize = 80;
+
+/// `budget` shrunk by [`ESTIMATE_BUDGET_PERCENT`].
+const fn with_estimate_margin(budget: usize) -> usize {
+    budget.saturating_mul(ESTIMATE_BUDGET_PERCENT) / 100
+}
+
 /// Errors returned from [`Bootstrap::run`].
 #[derive(Debug, Error)]
 pub enum BootstrapError {
@@ -1198,8 +1212,9 @@ pub fn prune_sources_to_budget(
     mut sources: Vec<BootstrapSource>,
     budget: usize,
 ) -> (Vec<BootstrapSource>, usize, usize) {
-    // Reserve ~1k tokens for the prompt scaffolding itself.
-    let usable = budget.saturating_sub(1_000);
+    // Leave headroom for the estimate's undercount, then reserve ~1k tokens
+    // for the prompt scaffolding itself.
+    let usable = with_estimate_margin(budget).saturating_sub(1_000);
     // Order: highest drop_priority FIRST → drop those when over budget.
     sources.sort_by_key(|s| std::cmp::Reverse(s.kind.drop_priority()));
     let total_count = sources.len();
@@ -1298,10 +1313,11 @@ fn chunk_sources_greedy(sources: Vec<BootstrapSource>, usable: usize) -> Vec<Vec
 
 fn usable_chunk_tokens(chunk_budget: usize) -> usize {
     const PROMPT_RESERVE: usize = 1_000;
-    if chunk_budget > PROMPT_RESERVE {
-        chunk_budget - PROMPT_RESERVE
+    let budget = with_estimate_margin(chunk_budget);
+    if budget > PROMPT_RESERVE {
+        budget - PROMPT_RESERVE
     } else {
-        chunk_budget
+        budget
     }
 }
 
@@ -1766,6 +1782,37 @@ mod tests {
         let (kept, dropped, _) = prune_sources_to_budget(vec![s1, s2], 50_000);
         assert_eq!(dropped, 0);
         assert_eq!(kept.len(), 2);
+    }
+
+    /// A bundle the bytes ÷ 4 estimate puts just under the budget can exceed
+    /// it on a real tokenizer (#884 measured ~1.4x on pt-BR text with code),
+    /// so bootstrap fills only 80% of each budget by its own estimate.
+    /// Control: a bundle well inside the margin keeps one chunk and every
+    /// source.
+    #[test]
+    fn budgets_leave_headroom_for_the_estimate_undercount() {
+        let near_limit = |tokens: usize| BootstrapSource {
+            kind: SourceKind::DocFile,
+            label: "docs/guia.md".into(),
+            text: "x".repeat(tokens * CHARS_PER_TOKEN - 32),
+        };
+        // 22K estimated tokens fit the old 23K usable chunk; with the margin
+        // (24K × 0.8 − 1K = 18.2K) they must be split.
+        let chunks = plan_bootstrap_chunks(vec![near_limit(22_000)], DEFAULT_CHUNK_INPUT_TOKENS);
+        assert!(chunks.len() > 1, "a near-limit chunk must be split");
+        for chunk in &chunks {
+            let t: usize = chunk.iter().map(BootstrapSource::estimated_tokens).sum();
+            assert!(t <= 18_200, "each chunk stays inside the margin; got {t}");
+        }
+        // The prune budget gets the same margin: 145K estimated tokens fit
+        // the old 149K usable prune but not 150K × 0.8 − 1K = 119K.
+        let (kept, dropped, _) = prune_sources_to_budget(vec![near_limit(145_000)], 150_000);
+        assert_eq!((kept.len(), dropped), (0, 1));
+
+        let small = plan_bootstrap_chunks(vec![near_limit(10_000)], DEFAULT_CHUNK_INPUT_TOKENS);
+        assert_eq!(small.len(), 1);
+        let (kept, dropped, _) = prune_sources_to_budget(vec![near_limit(100_000)], 150_000);
+        assert_eq!((kept.len(), dropped), (1, 0));
     }
 
     #[test]

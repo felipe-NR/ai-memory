@@ -2177,6 +2177,12 @@ remote or uses a custom host/port.
 --force                    (re-bootstrap, overwrites the prior manifest)
 ```
 
+**Budgets and the estimate.** Bootstrap estimates tokens as bytes ÷ 4, which
+undercounts non-English text and code, so it fills only 80% of
+`--max-input-tokens` and of each `--chunk-input-tokens` by that estimate. The
+dry run still reports tokens by the same estimate; the sources it keeps and the
+chunks it plans reflect the margin.
+
 **Cost.** With Kimi 2.6 via OpenRouter ($0.73/$3.49 per M):
 - 50k input tokens cap → ~$0.04 worst case input
 - 1-2k generated tokens → ~$0.007 output
