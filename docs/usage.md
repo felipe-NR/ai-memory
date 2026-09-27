@@ -525,9 +525,12 @@ pull requests). Three facts frame how such a record and ai-memory interact:
    repo moves. Details and bounds in [`docs/marker-file.md`](marker-file.md).
 
 3. **Wiki pages marked `pinned: true` are immutable to automation.**
-   Retention decay and curation skip them, and the auto-improvement
-   apply path hard-refuses to rewrite them (the proposal is recorded as
-   a conflict with the reason). Unpinning is the explicit opt-out.
+   Retention decay and curation skip them, multi-page consolidation
+   skips any update whose path names one (with a warning in the server
+   log; `_slots/` keep their own state/invariant regime), and the
+   auto-improvement apply path hard-refuses to rewrite them (the proposal
+   is recorded as a conflict with the reason). Unpinning is the explicit
+   opt-out.
 
 For a project without a repo-side record, decisions go *in* the wiki, and
 the managed durable-pages Agent Skill teaches agents the recipe:

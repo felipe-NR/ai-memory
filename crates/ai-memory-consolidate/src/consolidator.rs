@@ -374,6 +374,31 @@ impl Consolidator {
         ))
     }
 
+    /// A model-chosen batch path can name any existing page, including one a
+    /// person pinned. Pinned pages are immutable to automation, and the
+    /// request carries no pin of its own, so writing it would replace the
+    /// body and drop the pin. `_slots/` are pinned automatically and keep
+    /// the state/invariant regime above, so they are not skipped here.
+    fn should_skip_pinned_page_update(
+        &self,
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+        req: &WritePageRequest,
+    ) -> ConsolidatorResult<bool> {
+        if is_slot_path(&req.path) {
+            return Ok(false);
+        }
+        match self.wiki.read_page(workspace_id, project_id, &req.path) {
+            Ok(md) => Ok(md.frontmatter.get("pinned").and_then(|v| v.as_bool()) == Some(true)),
+            Err(ai_memory_wiki::WikiError::Io(err))
+                if err.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// Resolve the project preferences to append to a consolidation
     /// prompt: a per-call override when the caller passed one, else the
     /// body of the reserved `_prompts/consolidation.md` page in the
@@ -619,6 +644,14 @@ impl Consolidator {
                     path = %req.path.as_str(),
                     "skipped invariant slot update: the stored slot is marked \
                      slot_kind=invariant and this update does not declare one",
+                );
+                continue;
+            }
+            if self.should_skip_pinned_page_update(ws, proj, &req)? {
+                warn!(
+                    path = %req.path.as_str(),
+                    "skipped consolidation update: the existing page is pinned, \
+                     and pinned pages are immutable to automation",
                 );
                 continue;
             }
@@ -3781,6 +3814,104 @@ mod tests {
                 .await
                 .is_none(),
             "expired standing preferences must be absent from consolidation",
+        );
+    }
+
+    /// A multi-page batch whose model-chosen path names an existing pinned
+    /// page must leave that page alone: `docs/usage.md` promises pinned pages
+    /// are immutable to automation. Before the guard the batch replaced the
+    /// body and wrote the new version with `pinned = 0`. Controls in the same
+    /// batch: an unpinned page is updated, and a `_slots/` state slot (pinned
+    /// automatically) is still refreshed.
+    #[tokio::test]
+    async fn batch_update_to_a_pinned_page_keeps_its_body_and_pin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, wiki, session, ws, proj) = batch_fixture(tmp.path()).await;
+        let pinned_path = PagePath::new("notes/curated-history.md").unwrap();
+        let control_path = PagePath::new("notes/plain-note.md").unwrap();
+        let slot_path = PagePath::new("_slots/current-focus.md").unwrap();
+        for (path, pinned, body) in [
+            (&pinned_path, true, "Hand-curated history."),
+            (&control_path, false, "An ordinary unpinned note."),
+            (&slot_path, false, "Old focus."),
+        ] {
+            wiki.write_page(WritePageRequest {
+                workspace_id: ws,
+                project_id: proj,
+                path: path.clone(),
+                frontmatter: serde_json::json!({}),
+                body: body.into(),
+                tier: Tier::Semantic,
+                pinned,
+                title: None,
+                admission_ctx: None,
+                author_id: None,
+                actor: ai_memory_core::ActorContext::anonymous(),
+                evidence: Vec::new(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let mut response = batch_targeting(pinned_path.as_str(), "Generated decision body.");
+        for (path, body) in [
+            (&control_path, "Generated control body."),
+            (&slot_path, "New focus."),
+        ] {
+            let mut update = response["updates"][0].clone();
+            update["path"] = serde_json::json!(path.as_str());
+            update["body_markdown"] = serde_json::json!(body);
+            response["updates"].as_array_mut().unwrap().push(update);
+        }
+
+        let outcomes = Consolidator::new(
+            store.reader.clone(),
+            store.writer.clone(),
+            wiki.clone(),
+            Arc::new(ScriptedLlm(response)),
+            ws,
+            proj,
+        )
+        .consolidate_session_multi(
+            session,
+            false,
+            ai_memory_core::ActorContext::anonymous(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            outcomes.iter().all(|o| o.path != pinned_path),
+            "the skipped page must not be reported as written",
+        );
+
+        let db = rusqlite::Connection::open(store.db_path()).unwrap();
+        let latest_pinned = |path: &PagePath| -> i64 {
+            db.query_row(
+                "SELECT pinned FROM pages WHERE workspace_id = ?1 AND project_id = ?2 \
+                 AND path = ?3 AND is_latest = 1",
+                rusqlite::params![ws.as_bytes(), proj.as_bytes(), path.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        let pinned_page = wiki.read_page(ws, proj, &pinned_path).unwrap();
+        assert!(pinned_page.body.contains("Hand-curated history."));
+        assert!(!pinned_page.body.contains("Generated decision body."));
+        assert_eq!(
+            latest_pinned(&pinned_path),
+            1,
+            "the pin must survive the batch"
+        );
+
+        let control_page = wiki.read_page(ws, proj, &control_path).unwrap();
+        assert!(control_page.body.contains("Generated control body."));
+        let slot_page = wiki.read_page(ws, proj, &slot_path).unwrap();
+        assert!(
+            slot_page.body.contains("New focus."),
+            "state slots still refresh"
         );
     }
 }
