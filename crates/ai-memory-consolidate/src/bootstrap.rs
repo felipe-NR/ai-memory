@@ -547,14 +547,7 @@ impl Bootstrap {
         }
 
         let merged_pages: Vec<BootstrapPage> = pages_by_path.into_values().collect();
-        let rationale = if rationales.len() == 1 {
-            rationales.pop().unwrap_or_default()
-        } else {
-            format!(
-                "Processed in {llm_chunks} LLM chunks.\n\n{}",
-                rationales.join("\n\n---\n\n")
-            )
-        };
+        let rationale = merge_chunk_rationales(rationales, llm_chunks);
 
         // ---- write pages ------------------------------------------
         let now = Timestamp::now();
@@ -1401,6 +1394,27 @@ fn build_chunk_request(
     }
 }
 
+/// Manifest rationale from the per-chunk ones. `rationale` is
+/// `#[serde(default)]` and the Anthropic `tool_use` schema does not enforce
+/// required fields, so a chunk can return an empty one; joining those left
+/// bare `---` separators in `bootstrap.md`.
+fn merge_chunk_rationales(rationales: Vec<String>, llm_chunks: usize) -> String {
+    const NONE_RETURNED: &str = "_No chunk returned a rationale._";
+    let mut kept: Vec<String> = rationales
+        .into_iter()
+        .filter(|rationale| !rationale.trim().is_empty())
+        .collect();
+    if llm_chunks <= 1 {
+        return kept.pop().unwrap_or_else(|| NONE_RETURNED.to_string());
+    }
+    let body = if kept.is_empty() {
+        NONE_RETURNED.to_string()
+    } else {
+        kept.join("\n\n---\n\n")
+    };
+    format!("Processed in {llm_chunks} LLM chunks.\n\n{body}")
+}
+
 /// Highest `decisions/NNNN-…` serial seen in `prior_paths`, or 0.
 fn next_decision_serial(prior_paths: &[&str]) -> u32 {
     prior_paths
@@ -1900,6 +1914,28 @@ mod tests {
     fn effective_chunk_budget_clamps_to_max() {
         assert_eq!(effective_chunk_budget(50_000, 24_000), 24_000);
         assert_eq!(effective_chunk_budget(0, 24_000), 0);
+    }
+
+    /// Chunks that return no rationale must not leave bare separators in
+    /// the manifest. Control: the rationales that were returned all survive.
+    #[test]
+    fn manifest_rationale_skips_chunks_that_returned_none() {
+        let merged = merge_chunk_rationales(
+            vec!["Covered the README.".into(), String::new(), "  \n".into()],
+            3,
+        );
+        assert_eq!(merged, "Processed in 3 LLM chunks.\n\nCovered the README.");
+
+        let both = merge_chunk_rationales(vec!["First.".into(), "Second.".into()], 2);
+        assert_eq!(
+            both,
+            "Processed in 2 LLM chunks.\n\nFirst.\n\n---\n\nSecond."
+        );
+
+        let none = merge_chunk_rationales(vec![String::new(), String::new()], 2);
+        assert!(!none.contains("---"));
+        assert!(none.contains("No chunk returned a rationale"));
+        assert_eq!(merge_chunk_rationales(vec!["Only.".into()], 1), "Only.");
     }
 
     #[test]
