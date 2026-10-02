@@ -1875,8 +1875,8 @@ impl AiMemoryServer {
     ///      when hooks have published one (for THIS actor),
     ///   2. that same explicit `project` in the server's baked workspace,
     ///   3. the hook-published [`ActiveProject`] (the cwd the agent is
-    ///      currently working in, keyed by `actor` in opt-in isolation
-    ///      modes),
+    ///      currently working in, keyed by `actor` in the `per_actor` and
+    ///      `per_session` isolation modes),
     ///   4. the server's baked-in `--project` default.
     ///
     /// `actor` is built by [`Self::actor_key_from_parts`]; pass

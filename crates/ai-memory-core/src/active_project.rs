@@ -72,7 +72,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{ProjectId, WorkspaceId};
 
-/// Default TTL for per-key entries in the opt-in isolation modes.
+/// Default TTL for per-key entries in the `PerActor` and `PerSession`
+/// isolation modes.
 pub const DEFAULT_PER_KEY_TTL: Duration = Duration::from_secs(60 * 60);
 /// Default upper bound on per-key entries, to keep memory finite on shared
 /// installs where many short-lived sessions may come and go.
