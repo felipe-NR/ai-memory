@@ -19,13 +19,14 @@
 //!
 //! ## Isolation modes
 //!
-//! The default `Single` mode keeps the historical behaviour — one process-
-//! wide slot, last-write-wins. That is right for a single operator running
+//! The `Single` mode keeps the pre-v1.39 behaviour — one process-wide slot,
+//! last-write-wins. That is right for a single operator running
 //! one project at a time, but collapses parallel sessions on shared installs:
 //! a hook firing from `~/repo-A` overwrites the slot a concurrent
 //! `memory_query` (with no explicit project) in `~/repo-B` was about to read.
 //!
-//! Opt-in modes keep a per-key map alongside the single slot:
+//! The `PerActor` (default) and `PerSession` isolation modes keep a per-key
+//! map alongside the single slot:
 //!
 //! - `PerSession` keys by `session_id` — isolates concurrent agent runs of
 //!   the same operator (one person with several Claude Code / Codex windows
@@ -479,7 +480,7 @@ impl ActiveProject {
     /// hook router after it resolves an event's `cwd` to a real project.
     ///
     /// The actor's identity steers which slot is updated:
-    /// - In `Single` mode (the default), the process-wide slot is overwritten.
+    /// - In `Single` mode, the process-wide slot is overwritten.
     /// - In `PerSession` / `PerActor`, the entry keyed by the actor is set
     ///   *and* the single slot is updated as well, so callers that have no
     ///   actor identity (anonymous probes, legacy code paths) still see the
