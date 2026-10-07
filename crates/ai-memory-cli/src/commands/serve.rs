@@ -903,17 +903,16 @@ async fn run_session_consolidation_worker(
         let attempts = job.attempts();
         // An agent may have written the session page with its own model
         // while the session was still open, before this job existed. Leave
-        // that page alone unless observations arrived after it.
-        match consolidator
-            .agent_page_covers_generation(session_id, generation)
-            .await
-        {
+        // that page alone: the agent's own tool call, the Stop and the
+        // SessionEnd always land after it, so no observation count can tell
+        // a stale page from a current one.
+        match consolidator.session_page_written_by_agent(session_id).await {
             Ok(true) => {
                 match writer.complete_session_consolidation(job).await {
                     Ok(()) => info!(
                         session = %session_id,
                         generation,
-                        "SessionEnd: agent-written session page already covers this generation; consolidation skipped",
+                        "SessionEnd: session page was written by the agent; consolidation skipped",
                     ),
                     Err(error) => tracing::warn!(
                         %error,
@@ -4559,54 +4558,50 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// The agent wrote the session page while the session was open, and no
-    /// observation arrived after it: the worker completes the job without a
-    /// completion (the provider panics if called) and keeps the page.
+    /// The agent wrote the session page while the session was open: the
+    /// worker completes the job without a completion (the provider panics if
+    /// called) and keeps the page. The page's frontmatter predates the job's
+    /// last observation, as every real in-session write does, and a stale
+    /// `observation_generation` left by an older build changes nothing.
     #[tokio::test]
-    async fn session_consolidation_worker_keeps_a_current_agent_page() {
-        let (_tmp, store, wiki, workspace_id, project_id, session_id) =
-            session_with_written_page(serde_json::json!({
-                "consolidated_by": "agent",
-                "observation_generation": 1,
-            }))
-            .await;
-        let body = run_worker_once(
-            &store,
-            wiki,
-            Arc::new(PanicLlm),
-            workspace_id,
-            project_id,
-            session_id,
-        )
-        .await;
-        assert!(body.contains("Written by the agent"), "{body}");
-    }
-
-    /// Controls: a page the agent wrote before the job's last observation,
-    /// and a page with a current generation that no agent wrote, are both
-    /// consolidated as before.
-    #[tokio::test]
-    async fn session_consolidation_worker_replaces_a_stale_or_non_agent_page() {
+    async fn session_consolidation_worker_keeps_an_agent_page() {
         for frontmatter in [
+            serde_json::json!({"consolidated_by": "agent"}),
             serde_json::json!({"consolidated_by": "agent", "observation_generation": 0}),
-            serde_json::json!({"observation_generation": 1}),
         ] {
             let (_tmp, store, wiki, workspace_id, project_id, session_id) =
                 session_with_written_page(frontmatter.clone()).await;
             let body = run_worker_once(
                 &store,
                 wiki,
-                Arc::new(SuccessfulConsolidationLlm),
+                Arc::new(PanicLlm),
                 workspace_id,
                 project_id,
                 session_id,
             )
             .await;
             assert!(
-                body.contains("Durable worker completed"),
+                body.contains("Written by the agent"),
                 "{frontmatter}: {body}"
             );
         }
+    }
+
+    /// Control: a session page no agent wrote is consolidated as before.
+    #[tokio::test]
+    async fn session_consolidation_worker_replaces_a_non_agent_page() {
+        let (_tmp, store, wiki, workspace_id, project_id, session_id) =
+            session_with_written_page(serde_json::json!({"consolidated": true})).await;
+        let body = run_worker_once(
+            &store,
+            wiki,
+            Arc::new(SuccessfulConsolidationLlm),
+            workspace_id,
+            project_id,
+            session_id,
+        )
+        .await;
+        assert!(body.contains("Durable worker completed"), "{body}");
     }
 
     async fn two_project_wiki() -> (TempDir, Store, Wiki, WorkspaceId, ProjectId, ProjectId) {

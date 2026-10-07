@@ -16,8 +16,8 @@ use ai_memory_consolidate::{Consolidator, ConsolidatorError, redacted_error_summ
 use ai_memory_core::{
     ActiveProject, ActorKey, AgentKind, DEFAULT_WORKSPACE_NAME, Handoff, IdentityKey,
     MANAGED_WORKSTREAM_PACKET_MARKER, ManagedRunId, MidSessionRouting, NewHandoff, NewObservation,
-    NewSession, ObservationKind, ProjectId, Sanitized, Sanitizer, SessionId, WorkspaceId,
-    WorkstreamEvent, WorkstreamEventKind,
+    NewSession, ObservationKind, PageId, PagePath, ProjectId, Sanitized, Sanitizer, SessionId,
+    WorkspaceId, WorkstreamEvent, WorkstreamEventKind,
 };
 use ai_memory_store::{
     HookSessionAdmission, IngestObservationOutcome, StoreError, WriterHandle,
@@ -3841,29 +3841,37 @@ async fn process_authorized(
         } else {
             None
         };
-        let page_id = state
-            .wiki
-            .write_page(ai_memory_wiki::WritePageRequest {
-                workspace_id: new_page.workspace_id,
-                project_id: new_page.project_id,
-                path: new_page.path.clone(),
-                frontmatter: new_page.frontmatter_json.clone(),
-                body: new_page.body.clone(),
-                tier: new_page.tier,
-                pinned: new_page.pinned,
-                title: None,
-                admission_ctx: None,
-                author_id: None,
-                // Attribute to the operator who OWNED the session, read back
-                // from the session row, not to whoever delivered this
-                // SessionEnd — a spool drain, an operator finalizing a stuck
-                // session, or a shared hook token can all carry a different
-                // identity. NULL stays anonymous/shared, including rows that
-                // predate owner recording.
-                actor: session_actor.clone(),
-                evidence: Vec::new(),
-            })
-            .await?;
+        let page_id =
+            match agent_session_page_id(state, page_ws, page_proj, session_id, &new_page.path)
+                .await?
+            {
+                Some(page_id) => page_id,
+                None => {
+                    state
+                        .wiki
+                        .write_page(ai_memory_wiki::WritePageRequest {
+                            workspace_id: new_page.workspace_id,
+                            project_id: new_page.project_id,
+                            path: new_page.path.clone(),
+                            frontmatter: new_page.frontmatter_json.clone(),
+                            body: new_page.body.clone(),
+                            tier: new_page.tier,
+                            pinned: new_page.pinned,
+                            title: None,
+                            admission_ctx: None,
+                            author_id: None,
+                            // Attribute to the operator who OWNED the session, read back
+                            // from the session row, not to whoever delivered this
+                            // SessionEnd — a spool drain, an operator finalizing a stuck
+                            // session, or a shared hook token can all carry a different
+                            // identity. NULL stays anonymous/shared, including rows that
+                            // predate owner recording.
+                            actor: session_actor.clone(),
+                            evidence: Vec::new(),
+                        })
+                        .await?
+                }
+            };
         if track_page_write && previous_page_id != Some(page_id) {
             state.ingest_metrics.record_persisted(now_unix_ms());
         }
@@ -4554,6 +4562,47 @@ async fn consolidate_or_synth(
         });
     debug!(session = %session_id, "{}: rule-based checkpoint written", checkpoint_label);
     Ok(CheckpointOutcome { fallback_reason })
+}
+
+/// The id of `sessions/<id>.md` when the agent wrote it itself through
+/// `memory_write_page` with the session's id, which the automatic writers
+/// keep instead of replacing with the rule-based summary. The agent's own
+/// tool call, the Stop and the SessionEnd always land after that write, so
+/// no observation count separates a current page from a stale one. A page
+/// that cannot be read is replaced as before, with a warning.
+async fn agent_session_page_id(
+    state: &HookState,
+    workspace_id: WorkspaceId,
+    project_id: ProjectId,
+    session_id: SessionId,
+    path: &PagePath,
+) -> anyhow::Result<Option<PageId>> {
+    match state
+        .wiki
+        .session_page_written_by_agent(workspace_id, project_id, session_id)
+    {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(error) => {
+            warn!(
+                session = %session_id,
+                %error,
+                "could not read the session page; writing the rule-based summary",
+            );
+            return Ok(None);
+        }
+    }
+    let page_id = state
+        .reader
+        .latest_page_id_by_ids(workspace_id, project_id, path.as_str().to_owned())
+        .await?;
+    if page_id.is_some() {
+        info!(
+            session = %session_id,
+            "session page was written by the agent; keeping it over the rule-based summary",
+        );
+    }
+    Ok(page_id)
 }
 
 fn short_id(s: &str) -> String {
@@ -11305,6 +11354,89 @@ mod tests {
         assert_ne!(
             expected_proj, state.project_id,
             "routing must not use server-default project"
+        );
+    }
+
+    /// Deliver `session-start` and `user-prompt-submit`, write the session
+    /// page with `frontmatter` as `memory_write_page` would, then deliver a
+    /// later prompt (the agent's write is never the session's last event) and
+    /// `session-end`. Returns the latest session page body.
+    async fn session_end_over_written_page(frontmatter: serde_json::Value) -> String {
+        let tmp = TempDir::new().unwrap();
+        let state = make_state(&tmp).await;
+        let sid = "22222222-2222-2222-2222-222222222222";
+        let deliver = |event: &'static str| {
+            HookEnvelope::from_query_and_body(
+                HookQuery {
+                    event: event.into(),
+                    agent: Some("claude-code".into()),
+                    ..Default::default()
+                },
+                serde_json::json!({ "session_id": sid, "prompt": "consolidate this session" }),
+            )
+        };
+        for event in ["session-start", "user-prompt-submit"] {
+            process(&state, deliver(event), None, Vec::new())
+                .await
+                .unwrap();
+        }
+        let path = format!("sessions/{sid}.md");
+        state
+            .wiki
+            .write_page(ai_memory_wiki::WritePageRequest {
+                workspace_id: state.workspace_id,
+                project_id: state.project_id,
+                path: ai_memory_core::PagePath::new(path.clone()).unwrap(),
+                frontmatter,
+                body: "# Agent page\n\nCompiled by the agent's own model.".into(),
+                tier: ai_memory_core::Tier::Episodic,
+                pinned: false,
+                title: None,
+                admission_ctx: None,
+                author_id: None,
+                actor: ai_memory_core::ActorContext::anonymous(),
+                evidence: Vec::new(),
+            })
+            .await
+            .unwrap();
+        for event in ["user-prompt-submit", "session-end"] {
+            process(&state, deliver(event), None, Vec::new())
+                .await
+                .unwrap();
+        }
+        state
+            .reader
+            .page_body_by_ids(state.workspace_id, state.project_id, &path)
+            .await
+            .unwrap()
+            .expect("the session page must exist after SessionEnd")
+            .body
+    }
+
+    /// The agent wrote the session page itself, and the session went on after
+    /// the write: SessionEnd keeps the agent's page instead of replacing it
+    /// with the rule-based summary.
+    #[tokio::test]
+    async fn session_end_keeps_a_session_page_the_agent_wrote() {
+        let body = session_end_over_written_page(serde_json::json!({
+            "consolidated": true,
+            "consolidated_by": "agent",
+        }))
+        .await;
+        assert!(body.contains("Compiled by the agent's own model"), "{body}");
+    }
+
+    /// Control: the same page without `consolidated_by: agent` is replaced by
+    /// the rule-based summary, as before.
+    #[tokio::test]
+    async fn session_end_replaces_a_session_page_no_agent_wrote() {
+        let body = session_end_over_written_page(serde_json::json!({
+            "consolidated": true,
+        }))
+        .await;
+        assert!(
+            !body.contains("Compiled by the agent's own model"),
+            "{body}"
         );
     }
 

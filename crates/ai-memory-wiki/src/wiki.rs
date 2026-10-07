@@ -754,6 +754,34 @@ impl Wiki {
         parse(&raw)
     }
 
+    /// Whether the calling agent wrote `sessions/<session_id>.md` itself,
+    /// through `memory_write_page` with that session's id: the page carries
+    /// `consolidated_by: agent`. The automatic session-page writers leave such
+    /// a page alone, because it was compiled by the model the user was
+    /// working with. A missing page is `false`.
+    ///
+    /// # Errors
+    /// Propagates [`Self::read_page`] errors other than a missing file.
+    pub fn session_page_written_by_agent(
+        &self,
+        workspace_id: WorkspaceId,
+        project_id: ProjectId,
+        session_id: SessionId,
+    ) -> WikiResult<bool> {
+        let path = PagePath::new(format!("sessions/{session_id}.md"))?;
+        let frontmatter = match self.read_page(workspace_id, project_id, &path) {
+            Ok(md) => md.frontmatter,
+            Err(WikiError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(false);
+            }
+            Err(err) => return Err(err),
+        };
+        Ok(frontmatter
+            .get("consolidated_by")
+            .and_then(serde_json::Value::as_str)
+            == Some("agent"))
+    }
+
     fn confined_project_root(
         &self,
         workspace_id: WorkspaceId,

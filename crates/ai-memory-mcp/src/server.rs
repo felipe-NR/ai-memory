@@ -3905,9 +3905,8 @@ impl AiMemoryServer {
     /// The origin keys consolidation stamps on a session page, so a reader
     /// cannot tell the two writers apart by shape. `consolidated_by` is the
     /// one difference: the server cannot verify which model the agent ran, so
-    /// it records the route and no model name. `observation_generation` is
-    /// the session's observation count at write time, which the SessionEnd
-    /// worker compares to its job's generation before overwriting the page.
+    /// it records the route and no model name, and the automatic SessionEnd
+    /// writers leave a page carrying it alone.
     async fn stamp_session_page(
         &self,
         fm: &mut serde_json::Map<String, serde_json::Value>,
@@ -3933,15 +3932,6 @@ impl AiMemoryServer {
         fm.insert(
             "consolidated_by".into(),
             serde_json::Value::String("agent".into()),
-        );
-        let generation = self
-            .reader
-            .session_observation_count(session_id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        fm.insert(
-            "observation_generation".into(),
-            serde_json::Value::from(generation),
         );
         Ok(())
     }

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Fixed SessionEnd replacing the session page an agent wrote itself through
+  `memory_write_page` with `session_id`: the rule-based summary overwrote it
+  on every substantive session end, and the opt-in SessionEnd worker's skip
+  never applied, since it read the page after that overwrite and compared an
+  observation count that the agent's own tool call, the Stop and the
+  SessionEnd always advance. A session page carrying `consolidated_by: agent`
+  is now kept by both, and the write no longer stamps
+  `observation_generation`. (#TBD)
 - Fixed the hook spool charging a spooled event's retry budget while the
   server was unreachable: an endpoint-level delivery failure (connection
   refused, timeout, DNS — the existing `Unreachable` classification) no
