@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never applied, since it read the page after that overwrite and compared an
   observation count that the agent's own tool call, the Stop and the
   SessionEnd always advance. A session page carrying `consolidated_by: agent`
-  is now kept by both, and the write no longer stamps
+  is now kept by both, and by the PreCompact and PostCompaction checkpoints,
+  which rewrote it the same way. The write no longer stamps
   `observation_generation`. (#TBD)
 - Fixed the hook spool charging a spooled event's retry budget while the
   server was unreachable: an endpoint-level delivery failure (connection

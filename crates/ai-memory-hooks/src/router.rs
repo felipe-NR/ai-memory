@@ -4454,6 +4454,16 @@ async fn consolidate_or_synth(
     } else {
         None
     };
+    // A page the agent wrote itself is kept through a compaction as it is at
+    // SessionEnd: the checkpoint would replace it with the server's model or
+    // the rule-based summary.
+    let path = PagePath::new(format!("sessions/{session_id}.md"))?;
+    if agent_session_page_id(state, workspace_id, project_id, session_id, &path)
+        .await?
+        .is_some()
+    {
+        return Ok(CheckpointOutcome { fallback_reason });
+    }
     let fallback_from_llm = state.consolidator.is_some();
     if let Some(c) = state.consolidator.as_ref() {
         let result = c
@@ -11360,8 +11370,8 @@ mod tests {
     /// Deliver `session-start` and `user-prompt-submit`, write the session
     /// page with `frontmatter` as `memory_write_page` would, then deliver a
     /// later prompt (the agent's write is never the session's last event) and
-    /// `session-end`. Returns the latest session page body.
-    async fn session_end_over_written_page(frontmatter: serde_json::Value) -> String {
+    /// `closing`. Returns the latest session page body.
+    async fn written_page_after(frontmatter: serde_json::Value, closing: &'static str) -> String {
         let tmp = TempDir::new().unwrap();
         let state = make_state(&tmp).await;
         let sid = "22222222-2222-2222-2222-222222222222";
@@ -11399,7 +11409,7 @@ mod tests {
             })
             .await
             .unwrap();
-        for event in ["user-prompt-submit", "session-end"] {
+        for event in ["user-prompt-submit", closing] {
             process(&state, deliver(event), None, Vec::new())
                 .await
                 .unwrap();
@@ -11418,10 +11428,10 @@ mod tests {
     /// with the rule-based summary.
     #[tokio::test]
     async fn session_end_keeps_a_session_page_the_agent_wrote() {
-        let body = session_end_over_written_page(serde_json::json!({
-            "consolidated": true,
-            "consolidated_by": "agent",
-        }))
+        let body = written_page_after(
+            serde_json::json!({ "consolidated": true, "consolidated_by": "agent" }),
+            "session-end",
+        )
         .await;
         assert!(body.contains("Compiled by the agent's own model"), "{body}");
     }
@@ -11430,14 +11440,35 @@ mod tests {
     /// the rule-based summary, as before.
     #[tokio::test]
     async fn session_end_replaces_a_session_page_no_agent_wrote() {
-        let body = session_end_over_written_page(serde_json::json!({
-            "consolidated": true,
-        }))
-        .await;
+        let body =
+            written_page_after(serde_json::json!({ "consolidated": true }), "session-end").await;
         assert!(
             !body.contains("Compiled by the agent's own model"),
             "{body}"
         );
+    }
+
+    /// A compaction checkpoint keeps the agent's page as SessionEnd does,
+    /// and still replaces a page no agent wrote (control).
+    #[tokio::test]
+    async fn compaction_checkpoint_keeps_a_session_page_the_agent_wrote() {
+        for closing in ["pre-compact", "post-compaction"] {
+            let kept = written_page_after(
+                serde_json::json!({ "consolidated": true, "consolidated_by": "agent" }),
+                closing,
+            )
+            .await;
+            assert!(
+                kept.contains("Compiled by the agent's own model"),
+                "{closing}: {kept}"
+            );
+            let replaced =
+                written_page_after(serde_json::json!({ "consolidated": true }), closing).await;
+            assert!(
+                !replaced.contains("Compiled by the agent's own model"),
+                "{closing}: {replaced}"
+            );
+        }
     }
 
     /// A substantive SessionEnd must write the heuristic `sessions/<id>.md`
