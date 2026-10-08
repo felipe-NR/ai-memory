@@ -6,7 +6,9 @@ use ai_memory_core::repository_identity::{
 use ai_memory_core::{ProjectId, WorkspaceId};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{StoreError, StoreResult};
+use crate::{
+    AmbiguousMatch, AmbiguousProjectHolder, AmbiguousProjectHolders, StoreError, StoreResult,
+};
 
 pub(crate) const MAX_COORDINATE_ROWS: usize = 4;
 
@@ -43,7 +45,8 @@ const MATCH_SQL: &str = "WITH \
                 (exact_match OR canonical_match OR legacy_match) DESC, id LIMIT ?5) \
      SELECT p.id, p.name, NULLIF(p.identity, ''), NULLIF(p.identity_source, ''), \
             NULLIF(p.canonical_name, ''), NULLIF(p.legacy_name, ''), \
-            m.exact_match, m.canonical_match, m.legacy_match, m.identity_match, m.canonical_target \
+            m.exact_match, m.canonical_match, m.legacy_match, m.identity_match, m.canonical_target, \
+            p.access_mode = 'restricted' \
      FROM unique_matches m JOIN projects p ON p.id = m.id AND p.workspace_id = ?1 \
      ORDER BY m.identity_match DESC, m.exact_match DESC, \
               (m.exact_match OR m.canonical_match OR m.legacy_match) DESC, m.id";
@@ -71,7 +74,30 @@ pub(crate) struct ProjectCoordinateMatch {
     pub(crate) identity_source: Option<String>,
     pub(crate) canonical_name: Option<String>,
     pub(crate) legacy_name: Option<String>,
+    pub(crate) restricted: bool,
     pub(crate) provenance: MatchProvenance,
+}
+
+impl ProjectCoordinateMatch {
+    fn ambiguous_holder(&self) -> AmbiguousProjectHolder {
+        AmbiguousProjectHolder {
+            name: (!self.restricted).then(|| self.current_name.clone()),
+            matched_by: if self.provenance.exact {
+                AmbiguousMatch::Name
+            } else if self.provenance.canonical_compat {
+                AmbiguousMatch::CanonicalKey
+            } else {
+                AmbiguousMatch::LegacyKey
+            },
+        }
+    }
+}
+
+fn ambiguous(name: &str, holders: AmbiguousProjectHolders) -> StoreError {
+    StoreError::ProjectNameAmbiguous {
+        name: name.to_owned(),
+        holders,
+    }
 }
 
 pub(crate) fn matches(
@@ -106,6 +132,7 @@ pub(crate) fn matches(
                     row.get::<_, i64>(8)?,
                     row.get::<_, i64>(9)?,
                     row.get::<_, i64>(10)?,
+                    row.get::<_, bool>(11)?,
                 ))
             },
         )?
@@ -124,6 +151,7 @@ pub(crate) fn matches(
                 legacy_compat,
                 identity_match,
                 canonical_target,
+                restricted,
             )| {
                 Ok(ProjectCoordinateMatch {
                     id: ProjectId::from_slice(&raw_id)?,
@@ -132,6 +160,7 @@ pub(crate) fn matches(
                     identity_source,
                     canonical_name,
                     legacy_name,
+                    restricted,
                     provenance: MatchProvenance {
                         exact: exact != 0,
                         canonical_compat: canonical_compat != 0,
@@ -157,7 +186,15 @@ pub(crate) fn resolve(
     match matches.len() {
         0 => Ok(None),
         1 => Ok(matches.pop()),
-        _ => Err(StoreError::ProjectNameAmbiguous(requested.to_owned())),
+        _ => Err(ambiguous(
+            requested,
+            AmbiguousProjectHolders(
+                matches
+                    .iter()
+                    .map(ProjectCoordinateMatch::ambiguous_holder)
+                    .collect(),
+            ),
+        )),
     }
 }
 
@@ -175,6 +212,7 @@ fn row_to_match(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectCoordinateMa
         identity_source: row.get(3)?,
         canonical_name: row.get(4)?,
         legacy_name: row.get(5)?,
+        restricted: row.get(6)?,
         provenance: MatchProvenance {
             exact: true,
             ..MatchProvenance::default()
@@ -190,12 +228,13 @@ pub(crate) fn resolve_aliases(
     repository: &RepositoryIdentity,
 ) -> StoreResult<Option<ProjectCoordinateMatch>> {
     if repository.source != IdentitySource::GitRemote || aliases.is_empty() {
-        return Err(StoreError::ProjectNameAmbiguous(canonical.to_owned()));
+        return Err(ambiguous(canonical, AmbiguousProjectHolders::default()));
     }
     let canonical_match = conn
         .query_row(
             "SELECT id, name, NULLIF(identity, ''), NULLIF(identity_source, ''), \
-             NULLIF(canonical_name, ''), NULLIF(legacy_name, '') FROM projects \
+             NULLIF(canonical_name, ''), NULLIF(legacy_name, ''), \
+             access_mode = 'restricted' FROM projects \
              INDEXED BY sqlite_autoindex_projects_2 WHERE workspace_id = ?1 AND name = ?2",
             params![workspace_id.as_bytes(), canonical],
             row_to_match,
@@ -208,14 +247,15 @@ pub(crate) fn resolve_aliases(
         {
             return Ok(Some(canonical_match));
         }
-        return Err(StoreError::ProjectNameAmbiguous(canonical.to_owned()));
+        return Err(ambiguous(canonical, AmbiguousProjectHolders::default()));
     }
     let mut candidates = Vec::new();
     for alias in aliases.as_slice() {
         let local = conn
             .query_row(
                 "SELECT id, name, NULLIF(identity, ''), NULLIF(identity_source, ''), \
-                 NULLIF(canonical_name, ''), NULLIF(legacy_name, '') FROM projects \
+                 NULLIF(canonical_name, ''), NULLIF(legacy_name, ''), \
+                 access_mode = 'restricted' FROM projects \
                  INDEXED BY sqlite_autoindex_projects_2 WHERE workspace_id = ?1 AND name = ?2",
                 params![workspace_id.as_bytes(), alias],
                 row_to_match,
@@ -228,7 +268,7 @@ pub(crate) fn resolve_aliases(
     candidates.sort_by_key(|candidate| candidate.id.to_string());
     candidates.dedup_by_key(|candidate| candidate.id);
     if candidates.len() > 1 {
-        return Err(StoreError::ProjectNameAmbiguous(canonical.to_owned()));
+        return Err(ambiguous(canonical, AmbiguousProjectHolders::default()));
     }
     let Some(candidate) = candidates.pop() else {
         return Ok(None);
@@ -236,7 +276,7 @@ pub(crate) fn resolve_aliases(
     if candidate.identity.as_deref() != Some(repository.identity.as_str())
         || candidate.identity_source.as_deref() != Some(IdentitySource::GitRemote.as_str())
     {
-        return Err(StoreError::ProjectNameAmbiguous(canonical.to_owned()));
+        return Err(ambiguous(canonical, AmbiguousProjectHolders::default()));
     }
     Ok(Some(candidate))
 }
@@ -360,7 +400,7 @@ mod tests {
         );
         assert!(matches!(
             resolve(&conn, workspace, "collision"),
-            Err(StoreError::ProjectNameAmbiguous(_))
+            Err(StoreError::ProjectNameAmbiguous { .. })
         ));
         for index in [
             "sqlite_autoindex_projects_2",

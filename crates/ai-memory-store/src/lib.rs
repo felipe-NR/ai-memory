@@ -55,7 +55,9 @@ pub use decay::{
     lambda_from_half_life_days, retention_score, retention_score_with_breadth,
     salience_after_feedback,
 };
-pub use error::{StoreError, StoreResult};
+pub use error::{
+    AmbiguousMatch, AmbiguousProjectHolder, AmbiguousProjectHolders, StoreError, StoreResult,
+};
 pub use grants::{GrantFilter, GrantListing, GrantOutcome, ProjectGrant};
 pub use maintenance::MaintenanceJob;
 pub use ops::{

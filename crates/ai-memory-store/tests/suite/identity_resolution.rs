@@ -1589,6 +1589,61 @@ async fn exact_name_that_is_another_forges_canonical_key_fails_closed() {
     ));
 }
 
+/// A clone without the marker that declares `widget` creates `acme-widget`
+/// with `widget` as its legacy key (#1144). The refusal names both projects
+/// and the key each answers by, so the operator can tell which one to purge
+/// or rename, but never names a restricted project: the project list hides
+/// those names from callers without a grant, and this lookup runs before any
+/// caller is authorized.
+#[tokio::test]
+async fn an_ambiguous_name_names_its_holders_but_not_a_restricted_one() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let store = Store::open(tmp.path()).unwrap();
+    let ws = workspace(&store).await;
+    let declared = store
+        .writer
+        .get_or_create_project(ws, "widget", None)
+        .await
+        .unwrap();
+    let clone = resolve_capture(
+        &store,
+        ws,
+        &remote("github.com/acme/widget"),
+        IdentityStyle::Path,
+        "acme-widget",
+        None,
+    )
+    .await
+    .0;
+    assert_ne!(declared, clone);
+    assert_eq!(row(&store, clone).0, "acme-widget");
+
+    let error = lookup_existing_scope(&store.reader, "default", "widget")
+        .await
+        .unwrap_err();
+    assert!(error.is_bad_request());
+    assert_eq!(
+        error.to_string(),
+        "project 'widget' is ambiguous in workspace 'default': it is the name of \
+         project 'widget' and the legacy key of project 'acme-widget'"
+    );
+
+    store
+        .writer
+        .set_access_mode(clone, AccessMode::Restricted)
+        .await
+        .unwrap();
+    let error = lookup_existing_scope(&store.reader, "default", "widget")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "project 'widget' is ambiguous in workspace 'default': it is the name of \
+         project 'widget' and the legacy key of a restricted project"
+    );
+    assert!(!error.to_string().contains("acme-widget"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_legacy_and_canonical_resolve_or_create_converge_on_one_uuid() {
     let tmp = tempfile::TempDir::new().unwrap();

@@ -13,7 +13,7 @@ use ai_memory_core::{
     ActiveProject, ActiveProjectLookup, ActorKey, ProjectId, ReadPointer, UserId, WorkspaceId,
 };
 
-use crate::error::StoreError;
+use crate::error::{AmbiguousProjectHolders, StoreError};
 use crate::project_authz::{GrantLevel, ProjectAccess, ProjectPrincipal};
 use crate::{ReaderPool, WriterHandle};
 
@@ -182,6 +182,8 @@ pub enum ScopeResolutionError {
         workspace: String,
         /// Project name supplied by the caller.
         project: String,
+        /// The projects that answer to the name, when the lookup knows them.
+        holders: AmbiguousProjectHolders,
     },
     /// A project-only read did not resolve in either the actor's active
     /// workspace or the server's default workspace.
@@ -259,10 +261,14 @@ impl fmt::Display for ScopeResolutionError {
                     "project '{project}' not found in workspace '{workspace}'"
                 )
             }
-            ScopeResolutionError::ProjectNameAmbiguous { workspace, project } => {
+            ScopeResolutionError::ProjectNameAmbiguous {
+                workspace,
+                project,
+                holders,
+            } => {
                 write!(
                     f,
-                    "project '{project}' is ambiguous in workspace '{workspace}'"
+                    "project '{project}' is ambiguous in workspace '{workspace}'{holders}"
                 )
             }
             ScopeResolutionError::ProjectNotFoundInActiveOrDefault { project } => {
@@ -290,10 +296,13 @@ impl From<StoreError> for ScopeResolutionError {
 
 fn project_lookup_error(error: StoreError, workspace: &str, project: &str) -> ScopeResolutionError {
     match error {
-        StoreError::ProjectNameAmbiguous(_) => ScopeResolutionError::ProjectNameAmbiguous {
-            workspace: workspace.to_owned(),
-            project: project.to_owned(),
-        },
+        StoreError::ProjectNameAmbiguous { holders, .. } => {
+            ScopeResolutionError::ProjectNameAmbiguous {
+                workspace: workspace.to_owned(),
+                project: project.to_owned(),
+                holders,
+            }
+        }
         StoreError::Forbidden(message) => ScopeResolutionError::Forbidden(format!(
             "not authorized for {project}: this needs write access. {message}"
         )),

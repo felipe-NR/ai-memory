@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `class=provider status=400`) instead of the error's `Display`, which for a
   provider failure includes the upstream response body. The default path
   (no `answer`) is unchanged. (#1132)
+- Fixed the "project 'X' is ambiguous" refusal giving no clue which projects
+  collided. It now names each project that answers to the name and the key it
+  answers by (its name, its canonical key, or its legacy key), so an operator
+  whose undeclared clone created `acme-widget` with `widget` as its legacy key
+  can see which project to purge or rename. A restricted project is reported
+  as "a restricted project", never by name, matching the project list. (#1144)
 
 ## [2.6.0] - 2026-10-07
 
