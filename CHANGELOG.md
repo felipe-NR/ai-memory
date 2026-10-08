@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Corrected the `profile rebuild` guidance in `docs/cross-project-profile.md`
+  and the command's help: it never removes an entry, and a candidate recorded
+  by an earlier version keeps the classification it was recorded with, so
+  entries 2.6.0 admitted under the looser rules survive the upgrade and a
+  rebuild. The doc now gives the upgrade path, `profile review` then
+  `profile forget` on each entry to drop. (#TBD)
+
 ## [2.6.1] - 2026-10-08
 
 ### Fixed
