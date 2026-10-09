@@ -379,6 +379,53 @@ async fn tool_output_is_never_a_candidate() {
     assert!(statements.iter().any(|s| s.contains("pnpm")));
 }
 
+/// Text a harness or ai-memory put into a user-prompt observation is never
+/// harvested as the user's words: the instruction files Codex injects as a
+/// user turn (stored before the import filter knew its bare heading, and read
+/// again by `profile rebuild`), a harness block delivered as a user turn, and
+/// ai-memory's own routing block pasted into a prompt, even when the 16 KiB
+/// cap cut it before its end marker. The user's own sentence next to the
+/// pasted block is harvested (control).
+#[tokio::test]
+async fn injected_instructions_and_ai_memory_blocks_are_never_candidates() {
+    use ai_memory_core::routing_snippet::{MARKER_END, MARKER_START, SNIPPET_BODY};
+
+    let fx = fixture().await;
+    let alpha = project(&fx, "alpha").await;
+    let codex_turn = format!(
+        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n<!-- global-rules:start -->\n\
+         Always use yarn classic for installs.\n<!-- global-rules:end -->\n\n\
+         {MARKER_START}{SNIPPET_BODY}"
+    );
+    prompt(&fx, alpha, &codex_turn, 1).await;
+    prompt(
+        &fx,
+        alpha,
+        "<task-notification>\nAlways use yarn berry for installs.\n</task-notification>",
+        2,
+    )
+    .await;
+    let pasted = format!(
+        "Always use pnpm for installs.\n\n{MARKER_START}\n\
+         Never write routine notes to memory by hand.\n{MARKER_END}\n"
+    );
+    prompt(&fx, alpha, &pasted, 3).await;
+    let truncated = format!("Here is my file:\n{MARKER_START}{SNIPPET_BODY}");
+    prompt(&fx, alpha, &truncated, 4).await;
+
+    pass(&fx, &single_user()).await;
+    let statements = candidate_statements(&fx);
+    assert!(
+        statements.iter().any(|s| s.contains("pnpm")),
+        "the user's own sentence was lost: {statements:?}"
+    );
+    assert_eq!(
+        statements.len(),
+        1,
+        "injected text became a candidate: {statements:?}"
+    );
+}
+
 /// `[profile] contribute = false` keeps a project out entirely; the same
 /// words in a contributing project are harvested (control).
 #[tokio::test]

@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `backfill` stored the global file as a user prompt in every project, and
   the profile harvest admitted its "always"/"never" lines, which repeat across
   projects by construction. The import now recognizes both headings. (#TBD)
+- Fixed the profile harvest reading text the user did not write as the
+  user's words: a user-prompt observation that is a harness turn, such as
+  Claude Code's `<task-notification>` blocks or Codex's injected
+  instructions, is now skipped, and ai-memory's own routing and
+  recalled-history blocks inside a prompt are left out, including a block the
+  16 KiB prompt cap cut before its end marker. Codex instructions an earlier
+  version stored as prompts are skipped too when `profile rebuild` reads them
+  again. An entry an earlier version already admitted stays until
+  `ai-memory profile forget` removes it. (#TBD)
 - Fixed Cursor tool calls being stored with no title or content: Cursor's own
   hooks, and the Claude Code hooks Cursor also runs, send Claude's
   `tool_name`/`tool_input` fields, but Cursor was missing from the tool-capture

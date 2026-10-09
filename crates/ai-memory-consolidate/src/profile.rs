@@ -536,6 +536,50 @@ pub struct DetectedPreference {
     pub confidence: Option<f64>,
 }
 
+/// The part of a stored prompt the user wrote, or `None` when the whole turn
+/// is harness context. A user-prompt observation can carry text no one typed:
+/// a harness block delivered as a user turn (`<task-notification>`), the
+/// instruction files Codex injects, or ai-memory's own routing snippet and
+/// recalled history pasted along. Harvesting those turns the repository's
+/// rules, or ai-memory's security notice, into "the user's" preferences.
+/// Checked here as well as at import: hooks store harness turns as prompts,
+/// and `profile rebuild` re-reads observations stored before an import filter
+/// existed.
+fn user_written(body: &str) -> Option<String> {
+    if ai_memory_core::looks_like_markup_block(body)
+        || ai_memory_core::looks_like_codex_instructions(body)
+    {
+        return None;
+    }
+    let text = without_fenced(
+        body,
+        ai_memory_core::routing_snippet::MARKER_START,
+        ai_memory_core::routing_snippet::MARKER_END,
+    );
+    Some(without_fenced(
+        &text,
+        ai_memory_core::profile::UNTRUSTED_HISTORY_START,
+        ai_memory_core::profile::UNTRUSTED_HISTORY_END,
+    ))
+}
+
+/// `text` without the regions between `start` and `end`. An unclosed `start`
+/// drops the rest: the 16 KiB prompt cap can cut a block before its end.
+fn without_fenced(text: &str, start: &str, end: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find(start) {
+        out.push_str(&rest[..open]);
+        let inner = &rest[open + start.len()..];
+        match inner.find(end) {
+            Some(close) => rest = &inner[close + end.len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Sentences of `text` outside fenced code blocks and indented code, each
 /// trimmed and collapsed to one line.
 fn sentences(text: &str) -> Vec<String> {
@@ -1851,21 +1895,21 @@ async fn harvest_project(
     let mut pending: Vec<PendingSentence> = Vec::new();
     for prompt in &prompts {
         mark.observations_until = mark.observations_until.max(prompt.created_at);
+        let Some(text) = user_written(&prompt.body) else {
+            continue;
+        };
         let session_ref = format!("session:{}", prompt.session_id);
         if llm.is_some() {
-            pending.extend(
-                sentences(&prompt.body)
-                    .into_iter()
-                    .filter(|s| has_marker(s))
-                    .map(|sentence| PendingSentence {
-                        sentence,
-                        observed_at: prompt.created_at,
-                        session_ref: session_ref.clone(),
-                        contributor: prompt.contributor.clone(),
-                    }),
-            );
+            pending.extend(sentences(&text).into_iter().filter(|s| has_marker(s)).map(
+                |sentence| PendingSentence {
+                    sentence,
+                    observed_at: prompt.created_at,
+                    session_ref: session_ref.clone(),
+                    contributor: prompt.contributor.clone(),
+                },
+            ));
         } else {
-            for found in detect_preferences(&prompt.body) {
+            for found in detect_preferences(&text) {
                 candidates.push(candidate_from(
                     ProfileCandidateSource::Prompt,
                     session_ref.clone(),
