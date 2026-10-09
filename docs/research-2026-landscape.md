@@ -83,6 +83,7 @@ The market has consolidated into recognizable camps:
 | Self-hosted coding-agent store | **Engram** | Single Go binary, SQLite+FTS5, MCP, project scope, session-summary handoffs — a structured-row sibling captured via agent MCP calls, not lifecycle hooks (see below) |
 | Governed multi-agent / fleet memory | **Caura** | Shared fleet memory with visibility scopes, trust tiers, audit, governance on Postgres+pgvector — org-scale, not project-scale (see below) |
 | Shared memory server (proxy fan-in) | **TencentDB Agent Memory** | One proxy in front of many harnesses distilling Chat Memory / Skill / Wiki / CodeGraph; proxy interception, not MCP/hooks (see below) |
+| Agent-native version control (provenance) | **Atomic** | Replace Git with a patch-theory VCS where each file-changing agent turn is a signed change with model/token/cost provenance, plus a per-repository vault of goals, intents and attested memories; adjacent, not competing on substrate (see below) |
 | Code intelligence | **DeusData/codebase-memory-mcp** (~42K stars) | Index the *codebase* (162 languages, tree-sitter → SQLite graph, static C binary) rather than the *session* - adjacent, not competing: it remembers what the code is, not what you did (see `research-codebase-memory-mcp.md`) |
 | Agent-harness OS | **ECC** (~247K stars), plus the skills/agents-pack ecosystem | Install a whole plan→test→implement→review→**remember**→improve loop into the agent; memory is one thin pillar ("optimize the context window, persist everything else"), deliberately kept as *context, not policy* - adjacent, not competing (see `research-ecc.md`) |
 
@@ -428,6 +429,39 @@ transcripts, not *coding-project* recall — a different task we are not competi
 on. Per the research-doc convention, Honcho has no standalone deep-dive; this
 section is its record.
 
+### Raised during the RFC #1166 research (verified 2026-10-09)
+
+**Adjacent, overlapping on project memory: `atomicdotdev/atomic`** (~99 stars,
+Apache-2.0, Rust, commit 2026-10-08 on `dev`, release v0.19.1 of 2026-10-02).
+Atomic came up because its author opened the Agent Plugins portable-hooks
+proposal (agentplugins/agent-plugins-spec discussion 54) with Atomic's own
+integrations as the evidence. It describes itself as "a Semantic Change Graph
+(SCG) to track memory, intent, provenance, and change as a single unit of work":
+a **Git replacement** built on patch theory (it credits Pijul) over redb.
+`atomic agent enable` installs one integration package per agent (Antigravity
+CLI, Claude Code, Cline, Codex, GitHub Copilot, Cursor, Devin, Grok Build, Kilo
+Code, Kiro, OpenCode, Pi): it copies files and merges JSON into each agent's
+own config, records a receipt by hash for safe reinstall and removal, and runs
+nothing from the package. Each hook calls `atomic agent hooks <agent> <verb>`
+behind a `test -d .atomic … || true` guard, so it does nothing outside an Atomic
+repository. Each **file-changing** turn becomes a content-addressed change
+whose hashed section carries model, provider, session, token and cost
+provenance, with a condensed transcript in an unhashed, strippable section;
+the docs say read-only turns are skipped. On the memory side it keeps a
+per-repository **vault** (goals, intents, memory, skills, scratch), Ed25519-
+attested memory records (`atomic memory new --kind decision|lesson|constraint|
+preference|context`), and an LLM `atomic agent explain --save` pass that appends
+repo and workflow learnings to `CLAUDE.md`/`GEMINI.md`/`codex.md`; it also builds
+a tree-sitter code knowledge graph. The KPI figures on atomic.dev (90% accepted-
+change rate, 44% faster sessions, 82% less context read) are vendor
+self-reported. Where it differs from us: memory requires adopting its VCS per
+project, capture is per-change rather than per-session (read-only turns and
+the conversation around them are not recorded as memory), and distribution is
+the same config-editing installer model ai-memory already uses, not marketplace
+plugins. Its README says `atomic-agent` reimplements the capabilities of Entire
+CLI (entireio/cli), which this report has not researched. Per the research-doc
+convention, Atomic has no standalone deep-dive; this section is its record.
+
 ### Popularity and maintenance signal (as of 2026-09-18)
 
 None of the tracked competitors is stale or abandoned — every repo below had a
@@ -437,7 +471,7 @@ research). This is a healthy, crowded, fast-moving field: "we picked a dead
 space" is not a claim we can make, and none of these can be dismissed as
 unmaintained. (The five issue-#810 new-entrant rows — TencentDB Agent Memory,
 memU, EverOS, Engram, Caura — were verified against the GitHub metadata endpoint
-on 2026-09-22.)
+on 2026-09-22; the Atomic row on 2026-10-09.)
 
 | Project | Stars (~) | Last commit | Latest release | Status |
 |---|---|---|---|---|
@@ -458,6 +492,7 @@ on 2026-09-22.)
 | mcp-memory-service | 2.0k | 2026-09-18 | v11.12.0 (2026-09-14) | ACTIVE |
 | LangMem | 1.7k | 2026-09-09 | none (PyPI-versioned) | ACTIVE |
 | Caura | 0.5k | 2026-09-22 | backend-v3.17.2 (2026-09-19) | ACTIVE |
+| Atomic | 0.1k | 2026-10-08 | v0.19.1 (2026-10-02) | ACTIVE |
 | LiquidLM | n/a (closed) | n/a (engine closed) | `@liquidlm/cli` 0.1.5 (2026-09-17) | ACTIVE (young, pre-1.0, solo) |
 
 Reading it honestly: raw stars track **funding and app-developer reach**, not
@@ -740,6 +775,17 @@ benchmark number before R2 exists; chasing agentmemory's tool-count
   48%→76% is vendor self-reported. The name does **not** imply a Tencent DB
   dependency (SQLite by default). Analyzed inline in §3 per the no-standalone-doc
   convention.
+- Atomic (RFC #1166 research): github.com/atomicdotdev/atomic (README,
+  `atomic-agent/README.md`, `atomic-agent/src/integrations/` registry and
+  installer, LICENSE = Apache-2.0, release v0.19.1 of 2026-10-02, ~99 stars,
+  commit 2026-10-08 on `dev`); the per-agent packages under
+  github.com/atomicdotdev (`atomic-integration.toml` and `*.atomic-hooks.json`
+  files; `package.json` declares Apache-2.0); docs.atomic.dev via
+  github.com/atomicdotdev/atomic-docs (`agents/overview.md`,
+  `agents/installing-agent-integrations.md`, `commands/memory.md`); atomic.dev
+  (KPI figures vendor self-reported); agentplugins/agent-plugins-spec
+  discussion 54 (portable hooks proposal by Atomic's author). Analyzed inline in
+  §3 per the no-standalone-doc convention.
 - Zep/Graphiti: arXiv:2501.13956; getzep.com temporal-KG explainer;
   Neo4j "Graphiti: Knowledge graph memory for an agentic world".
 - Letta: "Is a Filesystem All You Need?" (letta.com blog, Aug 2025).

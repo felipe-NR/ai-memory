@@ -63,6 +63,7 @@ None of the competitors below has more than one or two of these; none has all.
 | **memU** (LLM-wiki + skill distillation, issue #810) | **Partly** — same file-first instinct, different default | Zero-LLM capture/retrieval by default (memU's distill flow is LLM-required), one binary (vs Python + sidecars patching host instruction files), MCP + hooks, git-versioned truth | memU's turnkey **skill-distillation-into-Markdown** packaging and its hosted cloud (memu.so). Our nearest equivalent is the opt-in experience/auto-improve pass, not a one-command skill distiller |
 | **Caura** (governed fleet memory, issue #810) | **No — different buyer** (org-scale multi-agent governance) | If you (mis)used it for one project: file-first git truth, zero-LLM, single-binary self-host, per-project scoping, no LLM egress | Its **fleet-governance layer** — org/team/agent visibility scopes and **four cross-fleet trust tiers** — which ai-memory does **not** match (see honest gaps); plus its managed platform and self-reported LoCoMo/LongMemEval numbers |
 | **TencentDB Agent Memory** (proxy fan-in server, issue #810) | **Mostly no — different capture model** | Hook/MCP capture into a file-first wiki you own (vs a base-URL proxy intercepting traffic), zero-LLM default, one binary vs a Node three-service stack, typed handoffs | Its zero-code proxy integration and its **CodeGraph** codebase index (adjacent code-intelligence we don't do). Note: needs no Tencent DB (SQLite default) — the name misleads |
+| **Atomic** (agent-native VCS, RFC #1166 research) | **Mostly no — different first job** (signed per-change provenance on a Git replacement); the two can run side by side | Memory without changing your VCS, session-level capture across 20+ harnesses (read-only turns, prompts and tool events included), typed handoffs and messaging, zero-LLM default, a git-markdown wiki | Signed, content-addressed per-turn change provenance with token and cost attestations, per-agent isolated views, Ed25519-attested memory records, and a tree-sitter code knowledge graph, none of which ai-memory does |
 | **Mem0/Zep for apps; OpenViking, Supermemory, LiquidLM, Honcho, Caura** | different buyer (app/user personalization, hosted context DB / RAG-as-a-service, user-modeling, org-scale fleet governance) — **not migration targets** | — | — |
 
 Net: the premise holds where it should. For a **self-hosted, multi-harness,
@@ -100,6 +101,16 @@ until the eval harness (R2) that would justify activating them gets built.
 | Belief-strength consolidation | Hindsight / mcp-memory-service | **SHIPPED, off by default (parity of mechanism, unproven)** | 2.4 (#815) computes a read-time, zero-LLM `confidence` over `page_evidence` (distinct-session breadth, recency, live `contradicts`, capped `[0,0.95]`), exposed inertly in `explain`/`status`; foldable into ranking authority behind a **default-0.0, R2-gated** weight. Our improvement over Hindsight's documented **entrenchment** failure: breadth-not-raw-count weighting, recency shading, a confidence cap, and **supersession always wins** regardless of evidence. Not yet default-on — no R2 delta run |
 | LLM merge/rewrite "dream" pass | Hindsight (Dreamer) / Supermemory ("dreaming") | **SHIPPED, opt-in/off (parity of mechanism, unproven)** | 2.4 (#816) rewrites cold clusters into one page via the gated `apply_batch` path, `dry_run` first, JSON-schema output; **never deletes a source** (superseded with a merge-note stub, `restore-page` recovers), off by default, provider-less stores keep the zero-LLM A3 path. Off until an R2 quality delta is shown |
 | bi-temporal-lite | Zep/Graphiti | **BEHIND by design** | Ingestion-time only; world-time validity deferred (honestly, because dating facts needs an LLM and breaks the zero-LLM path) |
+
+Not borrowed, noted for later: Atomic's installer records a **receipt by
+hash** of every file it writes, so a reinstall skips files the user edited and
+a removal deletes only files that still match. ai-memory has no install receipt
+today; it is a candidate if the marketplace-plugin work in RFC #1166 needs safer
+install and uninstall paths. Atomic's other habit, a hook command that does
+nothing outside an Atomic repository (`test -d .atomic … || true`), is already
+covered here by the allowlist capture mode ([`marker-file.md`](marker-file.md)),
+which drops every event from a repository without a marker inside the hook
+process.
 
 ## Honest gaps (consolidated) and recommended adjustments
 

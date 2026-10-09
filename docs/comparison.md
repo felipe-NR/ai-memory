@@ -63,13 +63,14 @@ not). See [where we're behind](#where-were-behind-or-different-by-choice).
 | Self-hosted coding-agent store | **Engram** | Single Go binary, SQLite+FTS5, MCP stdio, project-scoped, `mem_session_summary` handoffs, git-sync across machines | Structured rows the agent saves through MCP tools (SQLite is the truth, git-syncs compressed chunks), not a hand-editable git-markdown wiki captured automatically from lifecycle hooks |
 | Governed multi-agent / fleet memory | **Caura** | Shared fleet memory: agent/team/org visibility scopes, four trust tiers, audit log, PII flagging, contradiction/supersession, auto knowledge graph | Fleet-governance-first on Postgres+pgvector (LLM extraction), hosted option; ai-memory optimizes one project's git-backed wiki with `pages shared, batons owned`, not org-scale fleet governance |
 | Shared memory server (proxy fan-in) | **TencentDB Agent Memory** | One proxy in front of many harnesses distills chats/docs/code into Chat Memory / Skill / Wiki / CodeGraph assets | Proxy base-URL interception, not MCP or OS lifecycle hooks; despite the name it needs no Tencent DB product (SQLite by default); a Node three-service stack vs one file-first binary |
+| Agent-native version control (provenance) | **Atomic** (atomic.dev) | Every file-changing agent turn becomes a signed, content-addressed change carrying model, session, token and cost provenance; a per-repository vault (goals, intents, attested memories, learnings written back to `CLAUDE.md`); a code knowledge graph | A Git replacement first: its memory lives inside an Atomic repository, so you adopt its VCS (`atomic init` per project) to get it; read-only turns are not recorded; learnings come from an LLM `explain` pass. Adjacent rather than head-to-head: it remembers *what changed and why*, ai-memory remembers sessions and project knowledge across harnesses on top of Git |
 
 ## Maturity and maintenance
 
 This is a crowded, fast-moving field, and it is only fair to say so: **every tool
 compared here is actively maintained** (as of 2026-09-18, all had commits within
 the last ~10 days — none stale, none archived; the five new-entrant rows below
-were verified 2026-09-22). Raw GitHub popularity, though,
+were verified 2026-09-22, and the Atomic row on 2026-10-09). Raw GitHub popularity, though,
 tracks funding and app-developer reach more than coding-agent fitness — the
 star leaders are the app-personalization and hosted-context players (a different
 buyer), while the tools closest to ai-memory's file-first, self-hosted,
@@ -94,6 +95,7 @@ coding-continuity niche are smaller by design.
 | mcp-memory-service | 2.0k | 2026-09-14 | active |
 | LangMem | 1.7k | PyPI-only | active |
 | Caura | 0.5k | backend-v3.17.2 (2026-09-19) | active |
+| Atomic | 0.1k | v0.19.1 (2026-10-02) | active |
 | LiquidLM | closed-source | `@liquidlm/cli` 0.1.5 (2026-09-17) | active (young, solo) |
 
 Full figures, sources, and per-tool caveats: [`research-2026-landscape.md`](research-2026-landscape.md#popularity-and-maintenance-signal-as-of-2026-09-18).
@@ -251,6 +253,17 @@ operator turns it on.
   default). You give up its zero-code proxy integration and its CodeGraph code
   index (an adjacent, codebase-intelligence feature ai-memory does not do); you
   gain hook capture, a git-markdown wiki, typed handoffs, and zero-LLM operation.
+
+- **From Atomic (agent-native version control):** different first job. Atomic
+  replaces Git so that every file-changing agent turn is a signed change with
+  model, token and cost provenance, and keeps a per-repository vault of goals,
+  intents and memories. ai-memory stays on top of Git and remembers the session
+  itself (prompts, tool events, read-only turns included) across 20+ harnesses,
+  with handoffs between them. The two can run side by side: both install
+  lifecycle hooks, and neither needs the other. You give up (for now) signed,
+  per-turn change provenance, token and cost attestations, and Atomic's code
+  knowledge graph; you gain cross-harness memory without changing your VCS, a
+  zero-LLM default, and a git-markdown wiki you can `grep`.
 
 ## Where we're behind, or different by choice
 
