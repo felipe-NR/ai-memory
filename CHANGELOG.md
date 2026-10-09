@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Fixed a global `~/.codex/AGENTS.md` reaching the cross-project profile as
+  the user's own words. Codex injects its instruction files as a user message
+  headed `# AGENTS.md instructions for <cwd>` when a project `AGENTS.md`
+  contributes, and `# AGENTS.md instructions` with no directory when only the
+  global file does. The transcript import recognized only the first heading,
+  so `backfill` stored the global file as a user prompt in every project, and
+  the profile harvest admitted its "always"/"never" lines, which repeat across
+  projects by construction. The import now recognizes both headings. (#TBD)
 - Fixed Cursor tool calls being stored with no title or content: Cursor's own
   hooks, and the Claude Code hooks Cursor also runs, send Claude's
   `tool_name`/`tool_input` fields, but Cursor was missing from the tool-capture
