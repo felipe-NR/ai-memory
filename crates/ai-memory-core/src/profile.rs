@@ -538,9 +538,44 @@ impl ProfileEntry {
 fn first_prose_line(body: &str) -> Option<String> {
     body.lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#') && *line != "---")
-        .map(|line| line.trim_start_matches(['-', '*', ' ']).trim().to_owned())
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && *line != "---")
+        .filter(|line| !is_metadata_field(line))
+        .map(|line| {
+            field_value(line)
+                .unwrap_or_else(|| line.trim_start_matches(['-', '*', ' ']).trim())
+                .to_owned()
+        })
+        .find(|line| !line.is_empty())
+}
+
+/// The most words a field label has (`Status`, `Decision date`).
+const FIELD_LABEL_MAX_WORDS: usize = 3;
+
+/// The most words a metadata value has (`Accepted`, `2026-10-01`,
+/// `Alice, Bob`); a longer value is a sentence.
+const FIELD_VALUE_MAX_WORDS: usize = 4;
+
+/// Whether `line` is a page metadata field: an emphasized label with a short
+/// value, the way ADR-style pages open (`**Status:** Accepted`,
+/// `**Date**: 2026-10-01`). It describes the page, so it is never the page's
+/// statement.
+fn is_metadata_field(line: &str) -> bool {
+    field_value(line).is_some_and(|value| {
+        value.split_whitespace().count() <= FIELD_VALUE_MAX_WORDS && !value.ends_with(['.', '!'])
+    })
+}
+
+/// The value of a line that opens with an emphasized label, `None` for any
+/// other line.
+fn field_value(line: &str) -> Option<&str> {
+    let rest = line.trim().trim_start_matches(['-', '*', '_', ' ']);
+    [":**", "**:", ":__", "__:"].iter().find_map(|close| {
+        let (label, value) = rest.split_once(close)?;
+        let words = label.split_whitespace().count();
+        let plain = !label.contains(['*', '_', '.', '!', '?', ':', '`']);
+        ((1..=FIELD_LABEL_MAX_WORDS).contains(&words) && plain)
+            .then(|| value.trim_start_matches(['*', '_']).trim())
+    })
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -972,11 +1007,57 @@ mod tests {
         assert_eq!(e.applies_to, vec!["rust"]);
         assert!(e.enforced_by);
 
+        // An ADR opens with metadata fields; the statement is the first
+        // sentence after them, and a labelled sentence keeps its words.
+        let e = ProfileEntry::from_page(
+            "decisions/wal.md",
+            "Use WAL mode",
+            "# Use WAL mode\n\n**Status:** Accepted\n**Date**: 2026-10-01\n\
+             - **Deciders:** Alice, Bob\n**Context:**\n\n\
+             **Decision:** Every store opens SQLite in WAL mode.\n",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
+        assert_eq!(e.statement, "Every store opens SQLite in WAL mode.");
+        // Nothing but metadata: the title states the page.
+        let e = ProfileEntry::from_page(
+            "decisions/wal.md",
+            "Use WAL mode",
+            "**Status:** Accepted\n**Date:** 2026-10-01\n\n## Context\n",
+            &serde_json::Value::Null,
+        )
+        .unwrap();
+        assert_eq!(e.statement, "Use WAL mode");
+
         let long = "x".repeat(600);
         let e =
             ProfileEntry::from_page("profile/a.md", "A", &long, &serde_json::Value::Null).unwrap();
         assert_eq!(e.statement.len(), ENTRY_STATEMENT_MAX_BYTES);
         assert_eq!(e.category(), "");
+    }
+
+    #[test]
+    fn metadata_fields_are_told_from_sentences() {
+        for line in [
+            "**Status:** Accepted",
+            "Status:** Accepted",
+            "**Date**: 2026-10-01",
+            "- **Deciders:** Alice, Bob",
+            "__Owner:__ platform team",
+            "**Context:**",
+        ] {
+            assert!(is_metadata_field(line), "{line}");
+        }
+        for line in [
+            "**Rule:** Never use npm.",
+            "**Decision:** Every store opens SQLite in WAL mode",
+            "Always use pnpm for installs.",
+            "Use **pnpm**: it is faster.",
+            "Status: Accepted",
+            "Note: see the ADR for details.",
+        ] {
+            assert!(!is_metadata_field(line), "{line}");
+        }
     }
 
     #[test]

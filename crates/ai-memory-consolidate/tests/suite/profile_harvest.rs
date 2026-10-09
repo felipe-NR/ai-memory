@@ -379,6 +379,101 @@ async fn tool_output_is_never_a_candidate() {
     assert!(statements.iter().any(|s| s.contains("pnpm")));
 }
 
+/// An ADR's metadata fields (`**Status:** Accepted`, `**Date:**`) are never
+/// harvested as the page's statement, so `profile review` does not list them
+/// as habits waiting for promotion. The decision itself is the candidate, and
+/// a habit said in two projects is still admitted (controls).
+#[tokio::test]
+async fn page_metadata_fields_are_never_candidates() {
+    let fx = fixture().await;
+    let alpha = project(&fx, "alpha").await;
+    let beta = project(&fx, "beta").await;
+    for (proj, slug, context) in [
+        (alpha, "wal-mode", "Readers blocked the writer under load."),
+        (
+            beta,
+            "queue-backend",
+            "Jobs were lost when the broker restarted.",
+        ),
+    ] {
+        fx.wiki
+            .write_page(WritePageRequest {
+                workspace_id: fx.ws,
+                project_id: proj,
+                path: PagePath::new(format!("decisions/{slug}.md")).unwrap(),
+                frontmatter: serde_json::json!({}),
+                body: format!(
+                    "# {slug}\n\n\
+                     **Status:** Accepted\n\
+                     **Date:** 2026-10-01\n\
+                     **Deciders:** Alice, Bob\n\n\
+                     ## Context\n\n\
+                     {context}\n\n\
+                     ## Decision\n\n\
+                     We adopt it for every store.\n"
+                ),
+                tier: Tier::Semantic,
+                pinned: false,
+                title: None,
+                admission_ctx: None,
+                author_id: None,
+                actor: ActorContext::anonymous(),
+                evidence: Vec::new(),
+            })
+            .await
+            .unwrap();
+    }
+    prompt(
+        &fx,
+        alpha,
+        "I prefer small focused commits over big ones.",
+        1,
+    )
+    .await;
+    prompt(
+        &fx,
+        beta,
+        "I prefer small focused commits over big ones!",
+        3,
+    )
+    .await;
+
+    let report = pass(&fx, &single_user()).await;
+    let statements = candidate_statements(&fx);
+    for field in ["Status", "Date", "Deciders", "Accepted"] {
+        assert!(
+            statements.iter().all(|s| !s.contains(field)),
+            "a metadata field became a candidate: {statements:?}"
+        );
+    }
+    assert!(
+        statements
+            .iter()
+            .any(|s| s == "Readers blocked the writer under load."),
+        "{statements:?}"
+    );
+
+    let review = ai_memory_consolidate::profile::profile_review(
+        &fx.store.reader,
+        &single_user(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        review
+            .waiting
+            .iter()
+            .all(|w| !w.statement.contains("Accepted")),
+        "{:?}",
+        review.waiting
+    );
+    let pages = profile_pages(&fx, "_global");
+    assert_eq!(pages.len(), 1, "{report:?} {pages:?}");
+    assert!(pages[0].1.contains("small focused commits"), "{pages:?}");
+}
+
 /// `[profile] contribute = false` keeps a project out entirely; the same
 /// words in a contributing project are harvested (control).
 #[tokio::test]
