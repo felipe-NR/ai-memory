@@ -558,8 +558,11 @@ const FIELD_VALUE_MAX_WORDS: usize = 4;
 /// Whether `line` is a page metadata field: an emphasized label with a short
 /// value, the way ADR-style pages open (`**Status:** Accepted`,
 /// `**Date**: 2026-10-01`). It describes the page, so it is never the page's
-/// statement.
-fn is_metadata_field(line: &str) -> bool {
+/// statement. The form with the leading `**` already trimmed
+/// (`Status:** Accepted`), which candidates harvested before this check
+/// still carry, counts too.
+#[must_use]
+pub fn is_metadata_field(line: &str) -> bool {
     field_value(line).is_some_and(|value| {
         value.split_whitespace().count() <= FIELD_VALUE_MAX_WORDS && !value.ends_with(['.', '!'])
     })

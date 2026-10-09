@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   habits waiting for promotion: a curated page's statement was its first line
   of prose, which on an ADR-style page is a `**Status:** Accepted` or
   `**Date:**` field. Statements now skip those fields (a labelled sentence
-  such as `**Decision:** …` keeps its words). (#TBD)
+  such as `**Decision:** …` keeps its words), and fields harvested before the
+  fix no longer reach `profile review` or the profile. (#TBD)
 - Fixed `install-mcp --client claude-desktop` refusing to run on Linux:
   Anthropic ships Claude Desktop for Linux as a beta, and the command now
   writes `$XDG_CONFIG_HOME/Claude/claude_desktop_config.json` (default

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use ai_memory_core::profile::{
     EffectiveProfileShare, PROFILE_CATEGORIES, PROFILE_PATH_PREFIX, ProfileCandidateSource,
-    ProfileEntry, ProfileGenerality, ProfileSettings,
+    ProfileEntry, ProfileGenerality, ProfileSettings, is_metadata_field,
 };
 use ai_memory_core::{ActorContext, IdentityKey, PagePath, Tier, UserId, WorkspaceId};
 use ai_memory_llm::{ChatMessage, ChatRequest, LlmProvider, complete_structured};
@@ -1172,6 +1172,13 @@ pub fn converge(
         candidates
             .iter()
             .copied()
+            // A page's metadata field (`**Status:** Accepted`) describes the
+            // page, not a habit. Statements no longer start on one, but
+            // candidates harvested before that still sit in the store.
+            .filter(|row| {
+                row.candidate.source != ProfileCandidateSource::Page
+                    || !is_metadata_field(&row.candidate.statement)
+            })
             .partition(|row| row.candidate.source == ProfileCandidateSource::Stack);
 
     // Stack signals: one entry per language seen in enough projects.
@@ -2476,6 +2483,33 @@ mod tests {
 
     fn day(n: i64) -> i64 {
         1_790_000_000_000_000 + n * 86_400_000_000
+    }
+
+    /// A page metadata field stored by an earlier harvest never waits for
+    /// promotion; the same page's real statement still does (control).
+    #[test]
+    fn a_stored_page_metadata_field_is_not_a_waiting_habit() {
+        let page = |project: &str, statement: &str| {
+            let mut r = row(project, statement, day(1), ProfileGenerality::Project);
+            r.candidate.source = ProfileCandidateSource::Page;
+            r.candidate.source_ref = format!("page:decisions/{project}.md");
+            r
+        };
+        let status = page("alpha", "Status:** Accepted");
+        let date = page("beta", "Date:** 2026-10-01");
+        let decision = page("alpha", "Every store opens SQLite in WAL mode.");
+        let plan = converge(&[&status, &date, &decision], &[], &[], 2, 1);
+        let waiting: Vec<&str> = plan.waiting.iter().map(|w| w.statement.as_str()).collect();
+        assert_eq!(waiting, ["Every store opens SQLite in WAL mode."]);
+
+        // The same words from a prompt are not a page field and stay.
+        let said = row(
+            "alpha",
+            "Status:** Accepted",
+            day(1),
+            ProfileGenerality::Project,
+        );
+        assert_eq!(converge(&[&said], &[], &[], 2, 1).waiting.len(), 1);
     }
 
     /// Agent output in the prompt channel (a lead agent's brief, a pasted
