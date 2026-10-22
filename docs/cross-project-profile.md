@@ -95,7 +95,7 @@ folder: `stack`, `architecture`, `workflow`, `testing`, `tools`, `style` or
 
 | Key | Meaning |
 |---|---|
-| `summary` | The digest line (otherwise the first line of prose in the body). |
+| `summary` | The digest line (otherwise `abstract`, then the first line of prose in the body). The digest keeps at most 240 bytes of it and ends a longer line in `…`, so keep the rule itself inside that. |
 | `applies_to` | Stack tags the entry is scoped to, e.g. `[rust]` or `typescript`. |
 | `enforced_by` | Something already enforces it (e.g. `pre-push hook`); kept out of the digest. |
 

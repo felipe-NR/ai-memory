@@ -13,6 +13,12 @@ version in [`docs/changelog/`](docs/changelog/):
 
 ### Fixed
 
+- Fixed the profile digest cutting an entry's line at 240 bytes with no
+  sign of the cut: a `summary`, `abstract` or first prose line over the limit
+  was clipped mid-word, so the agent read part of a rule as the whole rule.
+  The line now ends in `…` inside the same 240 bytes, and
+  `docs/cross-project-profile.md` states the limit next to `summary`.
+  (#TBD)
 - Fixed a 3.2.0 regression that serialized local document embedding and
   dropped the vector stream from queries that raced a document embed: the
   local embedder's capacity was hardcoded to two slots (one document, one

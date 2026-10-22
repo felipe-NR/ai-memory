@@ -144,7 +144,7 @@ They do not agree on clip size or prose granularity.
 
 | Site | Order | Prose fallback | Clip |
 |---|---|---|---|
-| Profile digest `ProfileEntry::from_page` (`profile.rs` ~452-475) | `summary` then `abstract` then first prose **line** (then title) | `first_prose_line`: skips headings, `---`, ADR metadata fields | 240 **bytes**, no ellipsis (`ENTRY_STATEMENT_MAX_BYTES`) |
+| Profile digest `ProfileEntry::from_page` (`profile.rs` ~452-475) | `summary` then `abstract` then first prose **line** (then title) | `first_prose_line`: skips headings, `---`, ADR metadata fields | 240 **bytes**, ellipsis (`ENTRY_STATEMENT_MAX_BYTES`) |
 | A2 compaction `summary_line` (`crates/ai-memory-consolidate/src/compaction.rs` ~68-91) | `summary` then `abstract` then first non-empty, non-heading **paragraph** | collapse whitespace | `MAX_SUMMARY_LEN = 500` bytes, ellipsis |
 | V61 / wiki `frontmatter_abstract` (`wiki.rs` ~3099, duplicated in `embed.rs`) | `abstract` only | none | store cap `MAX_PAGE_ABSTRACT_LEN = 1024` (`page.rs` ~166) |
 
