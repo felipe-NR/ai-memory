@@ -11,6 +11,13 @@ version in [`docs/changelog/`](docs/changelog/):
 
 ## [Unreleased]
 
+### Fixed
+
+- Hook test suite (`tests/hooks/test_lib.sh`) now discovers all hook scripts
+  calling `ai_memory_briefing_qs` across `hooks/*/*.sh`, expanding briefing
+  opt-in test coverage to `antigravity-cli/pre-invocation.sh`,
+  `grok/post-tool-use.sh`, and `kimi-code/user-prompt-submit.sh`.
+
 ## [3.2.6] - 2026-10-26
 
 ### Fixed
