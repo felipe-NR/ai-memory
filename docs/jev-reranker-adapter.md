@@ -22,7 +22,9 @@ was removed in commit `e45db18a`; recover it with
 `git show 311fe87f:docs/examples/jev-reranker-adapter/jev_rerank_shim.py`).
 The adapter that ships under
 [`docs/examples/jev-reranker-adapter/`](examples/jev-reranker-adapter/) is
-the [choice-contrastive variant](#choice-contrastive-variant).
+the [choice-contrastive variant](#choice-contrastive-variant). The same
+directory also holds a choice adapter for the OpenAI Decisions API, described
+in [OpenAI Decisions variant](#openai-decisions-variant).
 
 ## How it works
 
@@ -194,6 +196,93 @@ grades (thresholding, logging heuristics, score fusion), because choice
 probabilities carry no absolute meaning and their scale shifts with
 candidate count.
 
+## OpenAI Decisions variant
+
+[`decisions_rerank_shim.py`](examples/jev-reranker-adapter/decisions_rerank_shim.py)
+asks the same single `choice` question of the
+[OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+(`POST /v1/decisions`, model `gpt-6-luna`) instead of Jev. It differs from
+the Jev choice adapter in four ways:
+
+- The query and candidates travel as one `input_json` part, which the API
+  treats as data, and each choice's description is the page title.
+- It holds no secret. It reuses the `Authorization` header ai-memory already
+  sends, so the OpenAI key that serves consolidation also serves reranking.
+- A `refusal` answer is a failure like a malformed one: the adapter answers
+  500 and ai-memory keeps its own order.
+- The question is neutral: "Which candidate page is most relevant to the
+  query?". With the Jev adapter's wording, Decisions refused 10 and 11 of
+  470 queries in two runs, at the same hit@k; the neutral wording refused 2.
+
+The provider stays `openai`, pointed at the adapter. The `openai` provider
+sends OpenAI's own request dialect whatever the base URL, so consolidation
+requests reach the upstream unchanged:
+
+```toml
+llm_provider = "openai"
+llm_model = "gpt-6-luna"
+llm_base_url = "http://127.0.0.1:18098"
+reranker = "llm"
+```
+
+| Env | Meaning | Default |
+|---|---|---|
+| `DECISIONS_URL` | Decisions endpoint | `https://api.openai.com/v1/decisions` |
+| `DECISIONS_MODEL` | model sent to Decisions | `gpt-6-luna` |
+| `DECISIONS_TIMEOUT` | seconds per judge call | `15` |
+| `UPSTREAM` | where every other request goes | `https://api.openai.com` |
+| `LISTEN` | adapter bind address | `127.0.0.1:18098` |
+
+Every LLM request now passes through the adapter, so consolidation stops
+when the adapter does. Under systemd, give the server unit
+`Wants=` and `After=` on the adapter's unit.
+
+### Measured on LongMemEval-S
+
+All 470 questions, zero-LLM retrieval (FTS5 with the default observation
+stream), server and harness built from `main` at `0e548807` on an AMD Ryzen 7
+8700G. `--concurrency 4` keeps at most four queries in flight, so the
+reranker's four-call gate never skips a query. Each reranked query sent
+about 3,000 input tokens to Decisions (mean 3,035, max 4,962), roughly
+$0.0003 at the published uncached rate.
+
+| reranker | hit@1 | hit@3 | hit@5 | hit@10 | p50 | p95 | failed calls |
+|---|---|---|---|---|---|---|---|
+| none | 0.857 | 0.930 | 0.951 | 0.972 | 11 ms | 81 ms | none |
+| Decisions, neutral wording (shipped) | 0.906 | 0.968 | 0.983 | 0.989 | 387 ms | 767 ms | 2 refusals |
+| Decisions, Jev wording, run 1 | 0.900 | 0.970 | 0.979 | 0.985 | 381 ms | 641 ms | 11 refusals |
+| Decisions, Jev wording, run 2 | 0.909 | 0.972 | 0.981 | 0.987 | 371 ms | 638 ms | 10 refusals |
+| `openai` chat, `gpt-6-luna` | 0.902 | 0.981 | 0.987 | 0.991 | 6,331 ms | 13,262 ms | 6 past the 20 s budget, one HTTP 500 |
+
+The two runs of the same Decisions wording differ by 0.009 at hit@1, so
+read differences below 0.01 as noise. Decisions matches the chat
+reranker at hit@1 at about a sixteenth of its median latency. The chat
+reranker leads at hit@3 and hit@5. Decisions reports probabilities to two
+decimals, so every candidate below 0.005 ties at 0.00 and keeps its fused
+order: only the head of the list is reordered. Both judges cost hit@1 on
+the knowledge-update slice (0.986 without reranking, 0.931 with the chat
+reranker, 0.917 to 0.931 across the three Decisions runs), where an older
+session that states the superseded value sometimes wins.
+
+To reproduce, run the adapter on `127.0.0.1:18098`, then:
+
+```bash
+ai-memory-eval retrieval --server-bin target/release/ai-memory \
+  --concurrency 4 --http-timeout-secs 900 \
+  --server-env AI_MEMORY_RETRIEVAL__OBSERVATION_STREAM=true \
+  --server-env AI_MEMORY_EVAL_SKIP_WIKI_CHECKPOINTS=1 \
+  --candidate-reranker \
+  --candidate-server-env AI_MEMORY_RETRIEVAL__OBSERVATION_STREAM=true \
+  --candidate-server-env AI_MEMORY_EVAL_SKIP_WIKI_CHECKPOINTS=1 \
+  --candidate-server-env AI_MEMORY_LLM_PROVIDER=openai \
+  --candidate-server-env AI_MEMORY_LLM_MODEL=gpt-6-luna \
+  --candidate-server-env AI_MEMORY_LLM_BASE_URL=http://127.0.0.1:18098 \
+  --candidate-server-env OPENAI_API_KEY="$OPENAI_API_KEY"
+```
+
+Until the harness masks credential values (EVALS_ISSUE_REF), the report's
+config line prints that key: remove it before sharing the report.
+
 ## Caveats
 
 - The adapter keys on the exact system-prompt prefix above. If the
@@ -210,3 +299,6 @@ candidate count.
   variant is safe to substitute for it.
 - Run the adapter on loopback or a trusted private network. It forwards
   `Authorization` headers verbatim and adds no authentication of its own.
+- The Decisions adapter sends each reranked query and up to 30 candidate
+  titles and snippets to OpenAI, as the `llm` reranker already does with
+  any hosted provider. See the reranking entry in `SECURITY.md`.
