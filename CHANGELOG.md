@@ -164,6 +164,16 @@ version in [`docs/changelog/`](docs/changelog/):
   side is upgraded, and nothing showed it. When they differ in major version,
   the text report adds a warning to upgrade the older side (#1644).
 
+- Added an OpenAI Decisions API variant of the choice reranker adapter
+  (`docs/examples/jev-reranker-adapter/decisions_rerank_shim.py`, documented
+  in `docs/jev-reranker-adapter.md`). It turns each `AI_MEMORY_RERANKER=llm`
+  request into one `choice` question to `POST /v1/decisions`, reuses the
+  `Authorization` header ai-memory already sends, and proxies every other
+  request to OpenAI unchanged. On LongMemEval-S (470 questions, zero-LLM
+  retrieval) it raised hit@1 from 0.857 to 0.906 and hit@5 from 0.951 to 0.983
+  at a 387 ms median query, where the `openai` chat reranker on `gpt-6-luna`
+  reached 0.902 and 0.987 at 6.3 s (#TBD).
+
 ### Changed
 
 - `memory_lint` now reports embedding-band pairs as
