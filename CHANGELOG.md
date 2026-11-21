@@ -13,6 +13,12 @@ version in [`docs/changelog/`](docs/changelog/):
 
 ### Fixed
 
+- Stopped the `/web` Features page from reporting automatic learning as
+  "Scheduled" when only `[auto_improve] on_session_end` was set. The key has
+  no effect, since session-end triggering stays off and
+  `[auto_improve.scheduler]` runs reviews; the config template, the key's
+  documentation and the page's next step said otherwise. (#TBD)
+
 - Kept scheduled mirror and online backups running when a native install
   stores its configuration in the data directory and has no default
   external configuration directory. (#2385)
